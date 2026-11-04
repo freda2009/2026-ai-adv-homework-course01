@@ -22,6 +22,12 @@ document.addEventListener('DOMContentLoaded', function () {
     ordersLink.style.display = Auth.isLoggedIn() ? '' : 'none';
   }
 
+  const cartNotice = sessionStorage.getItem('flower_cart_notice');
+  if (cartNotice) {
+    sessionStorage.removeItem('flower_cart_notice');
+    Notification.show(cartNotice, 'warning');
+  }
+
   if (cartBadge) {
     apiFetch('/api/cart').then(function (res) {
       if (res && res.data && res.data.items && res.data.items.length > 0) {

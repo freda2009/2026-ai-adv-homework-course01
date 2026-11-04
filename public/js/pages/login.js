@@ -8,6 +8,13 @@ createApp({
     const registerForm = ref({ name: '', email: '', password: '' });
     const errors = ref({});
 
+    // 登入後會立即跳頁，提示留到下一頁由 header-init.js 顯示
+    function rememberCartNotice(cartMerge) {
+      if (cartMerge && cartMerge.adjusted > 0) {
+        sessionStorage.setItem('flower_cart_notice', '部分購物車商品因庫存不足已調整，請確認數量');
+      }
+    }
+
     function validateLogin() {
       errors.value = {};
       if (!loginForm.value.email.trim()) errors.value.email = '請輸入 Email';
@@ -36,6 +43,7 @@ createApp({
           body: JSON.stringify(loginForm.value)
         });
         Auth.login(res.data.token, res.data.user);
+        rememberCartNotice(res.data.cart_merge);
         Notification.show('登入成功', 'success');
         const params = new URLSearchParams(window.location.search);
         window.location.href = params.get('redirect') || '/';
@@ -55,6 +63,7 @@ createApp({
           body: JSON.stringify(registerForm.value)
         });
         Auth.login(res.data.token, res.data.user);
+        rememberCartNotice(res.data.cart_merge);
         Notification.show('註冊成功', 'success');
         const params = new URLSearchParams(window.location.search);
         window.location.href = params.get('redirect') || '/';
