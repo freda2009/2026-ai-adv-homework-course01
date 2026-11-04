@@ -18,7 +18,8 @@
 
 - 訂單詳情頁的「付款成功／付款失敗」模擬按鈕改為「前往綠界付款」與「查詢付款狀態」。`PATCH /api/orders/:id/pay` 仍保留，但前端不再呼叫。
 - `BASE_URL`、`ECPAY_MERCHANT_ID`、`ECPAY_HASH_KEY`、`ECPAY_HASH_IV`、`ECPAY_ENV` 由預留改為實際使用；`.env.example` 補上說明。
-- CheckMacValue 測試向量複製至 `tests/fixtures/ecpay-checkmacvalue.json`，`tests/ecpay.test.js` 不再依賴未納入版控的 `.claude/skills/`。
+- CheckMacValue 測試向量複製至 `tests/fixtures/ecpay-checkmacvalue.json`，`tests/ecpay.test.js` 不再依賴 `.claude/skills/` 的目錄結構。
+- `.claude/skills/ecpay/`（綠界整合 skill）納入版控。
 - 文件同步 ECPay 現況（`README`、`ARCHITECTURE`、`DEVELOPMENT`、`FEATURES`、`TESTING`），計畫移至 `docs/plans/archive/2026-11-04-ecpay-payment.md`。
 
 ## [1.0.0] - 2026-11-03

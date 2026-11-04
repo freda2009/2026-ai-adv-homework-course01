@@ -272,7 +272,7 @@ Supertest 的請求必須 `await`，否則測試可能在斷言執行前就結�
 
 ### 11. CheckMacValue 測試向量是複製來的
 
-`tests/fixtures/ecpay-checkmacvalue.json` 複製自 ecpay skill 的 `test-vectors/checkmacvalue.json`，讓全新 clone 不必安裝 skill 也能執行測試。兩者不會自動同步，skill 的向量更新時要手動重新複製。檔案共 8 筆向量，`ecpay.test.js` 只使用其中 5 筆 `method` 為 `SHA256` 且沒有 `formula` 的向量。
+`tests/fixtures/ecpay-checkmacvalue.json` 複製自 `.claude/skills/ecpay/test-vectors/checkmacvalue.json`，目前內容相同，且兩者都已納入版控。測試只讀 fixture，所以更新或移除 skill 不會影響測試。兩者不會自動同步，skill 的向量更新時要手動重新複製。檔案共 8 筆向量，`ecpay.test.js` 只使用其中 5 筆 `method` 為 `SHA256` 且沒有 `formula` 的向量。
 
 ### 12. 模擬綠界回應
 

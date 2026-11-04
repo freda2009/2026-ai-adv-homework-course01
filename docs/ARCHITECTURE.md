@@ -40,6 +40,7 @@ Express（app.js）
 ├── .env.example              # 環境變數範本
 ├── database.sqlite*          # 執行時產生，git 忽略（含 -wal、-shm）
 ├── openapi.json              # npm run openapi 才產生；目前未被 git 忽略也未提交
+├── .claude/skills/ecpay/     # 綠界整合 skill（指南、SDK 範例、測試向量），供 AI 協作使用；應用程式與測試都不會載入
 │
 ├── src/
 │   ├── database.js           # 開啟 DB、設定 pragma、建表、種子資料；匯出 db 單例
