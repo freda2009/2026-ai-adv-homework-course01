@@ -25,7 +25,7 @@ Express（app.js）
 
 1. **頁面不查資料庫**。`pageRoutes.js` 只傳標題、頁面腳本名稱與 URL 參數；所有業務資料都由瀏覽器中的 Vue 呼叫 API 取得。例外是 `/ecpay/payment/:orderId`，它必須在伺服器端讀取訂單並簽章，所以自行驗證 JWT。
 2. **權限只在 API 把關**。`pageRoutes.js` 的頁面路由沒有任何認證，`/admin/products` 對未登入者也回 200；`requireAuth`／`requireAdmin` 是前端導頁，不是安全邊界。
-3. **沒有 repository 分層**。SQL 直接寫在路由 handler，且全部同步執行。`src/services/ecpay.js` 是唯一的 service，只負責綠界的簽章與 HTTP 呼叫，不碰資料庫。
+3. **沒有 repository 分層**。SQL 直接寫在路由 handler，且全部同步執行。例外是 `src/services/`：`ecpay.js` 只負責綠界的簽章與 HTTP 呼叫，不碰資料庫；`cart.js` 負責登入與註冊時合併訪客購物車，因為兩個路由共用同一段多表寫入。
 
 ## 目錄結構
 
@@ -50,6 +50,7 @@ Express（app.js）
 │   │   ├── sessionMiddleware.js  # 全域：把 X-Session-Id 放到 req.sessionId，從不拒絕請求
 │   │   └── errorHandler.js       # 全域錯誤處理，隱藏內部訊息
 │   ├── services/
+│   │   ├── cart.js               # 登入或註冊時將訪客購物車併入會員購物車
 │   │   └── ecpay.js              # 綠界 CheckMacValue、MerchantTradeNo、AIO 參數、QueryTradeInfo
 │   └── routes/
 │       ├── authRoutes.js         # 註冊、登入、個人資料
@@ -118,7 +119,7 @@ Express（app.js）
 3. 載入 middleware 模組，再 `require('./src/database')`：
    - 開啟（或建立）`<專案根目錄>/database.sqlite`，路徑固定，無法用環境變數改變。
    - 設定 `journal_mode = WAL`、`foreign_keys = ON`。
-   - 以 `CREATE TABLE IF NOT EXISTS` 建立 5 張表。
+   - 以 `CREATE TABLE IF NOT EXISTS` 建立 6 張表，並執行 `backfillEcpayTrades()`（可重複執行的回填）。
    - 以 `PRAGMA table_info(orders)` 檢查後 `ALTER TABLE` 補上 4 個綠界欄位，既有資料庫不需刪除重建。
    - `seedAdminUser()`：`ADMIN_EMAIL` 不存在才建立管理員。
    - `seedProducts()`：`products` 為空才寫入 8 筆商品。
@@ -345,7 +346,7 @@ Authorization 以 "Bearer " 開頭？
 
 ## 資料庫 Schema
 
-共 5 張表，定義於 `src/database.js`。慣例：
+共 6 張表，定義於 `src/database.js`。慣例：
 
 - 主鍵都是應用程式產生的 UUID v4（`TEXT`）。
 - 金額與數量是 `INTEGER`（新台幣整數）。
@@ -402,7 +403,7 @@ Authorization 以 "Bearer " 開頭？
 | `total_amount` | INTEGER | NOT NULL | 商品小計；**不含運費** |
 | `status` | TEXT | NOT NULL, DEFAULT `'pending'`, CHECK IN (`pending`, `paid`, `failed`) | |
 | `created_at` | TEXT | NOT NULL, DEFAULT `datetime('now')` | 沒有 `updated_at` |
-| `merchant_trade_no` | TEXT | 可為 NULL | 送交綠界的交易編號；每次進入付款頁都會覆寫。NULL 表示尚未發起綠界付款。無 UNIQUE 約束 |
+| `merchant_trade_no` | TEXT | 可為 NULL | 最新發起的綠界交易編號；已付款時為實際付款的編號。完整歷史在 `ecpay_trades`。NULL 表示尚未發起綠界付款。無 UNIQUE 約束 |
 | `ecpay_trade_no` | TEXT | 可為 NULL | 綠界的 `TradeNo`，付款確認時寫入 |
 | `payment_type` | TEXT | 可為 NULL | 綠界回傳的 `PaymentType`，也就是實際使用的付款方式，例如 `Credit_CreditCard`、`WebATM_LAND` |
 | `paid_at` | TEXT | 可為 NULL | 綠界回傳的 `PaymentDate` 原始字串，格式 `yyyy/MM/dd HH:mm:ss`。**與其他時間欄位不同，不是 `datetime('now')` 產生的 UTC 格式**，不要直接混用比較 |
@@ -422,10 +423,26 @@ Authorization 以 "Bearer " 開頭？
 
 顯示歷史訂單時要使用快照欄位，**不要 JOIN `products`**，商品可能已改價或被刪除。
 
+### `ecpay_trades`
+
+保存每次發起綠界付款的交易編號。`orders.merchant_trade_no` 只留最新一筆，重入付款頁後舊編號會遺失，導致已付款的舊交易查不到；此表保留全部歷史，供 `check-payment` 與付款頁對帳。
+
+| 欄位 | 型別 | 約束 | 說明 |
+| --- | --- | --- | --- |
+| `id` | INTEGER | PK AUTOINCREMENT | 產生順序 |
+| `merchant_trade_no` | TEXT | UNIQUE, NOT NULL | 送交綠界的編號 |
+| `order_id` | TEXT | NOT NULL, FK → `orders.id` | 建有索引 `idx_ecpay_trades_order_id` |
+| `trade_status` | TEXT | 可為 NULL | 最後查得的 `TradeStatus`；未查過為 NULL |
+| `checked_at` | TEXT | 可為 NULL | 最後查詢時間（UTC） |
+| `created_at` | TEXT | NOT NULL, DEFAULT `datetime('now')` | |
+
+遷移：`initializeDatabase()` 建表後，以 `INSERT OR IGNORE ... SELECT` 把 `orders` 既有的 `merchant_trade_no` 回填進來，可重複執行，不需刪庫。`db.backfillEcpayTrades` 掛在 db 物件上供測試呼叫。每筆訂單最多 10 筆。
+
 ### 關聯與刪除行為
 
 ```text
 users 1─* orders 1─* order_items ┄┄ products（僅邏輯關聯，無外鍵）
+orders 1─* ecpay_trades
 users 1─* cart_items *─1 products
 session_id（無資料表）1─* cart_items
 ```
@@ -461,7 +478,7 @@ session_id（無資料表）1─* cart_items
 ### 結帳建立訂單
 
 1. `/cart` 點「前往結帳」：未登入導向 `/login?redirect=/checkout`。
-2. 登入後導回 `/checkout`，此時 `GET /api/cart` 以 **`user_id`** 查詢。訪客車不會出現；車為空則導回 `/cart`。
+2. 登入成功時，`mergeGuestCart` 依 `X-Session-Id` 將訪客車併入會員車。導回 `/checkout` 後，`GET /api/cart` 以 **`user_id`** 查詢；車為空則導回 `/cart`。
 3. 送出時呼叫 `POST /api/orders`。後端依序：驗證欄位 → 讀取會員購物車 → 檢查空車 → 檢查每項庫存 → 計算總額。
 4. 在 `db.transaction` 中：建立 `orders` → 逐項建立 `order_items` 並扣庫存 → 清空該會員購物車。
 5. 回 201，前端導向 `/orders/:id`。
@@ -473,7 +490,7 @@ session_id（無資料表）1─* cart_items
 ```text
 瀏覽器                         Express                          綠界
   │ GET /ecpay/payment/:id?token=  │                               │
-  ├───────────────────────────────▶│ 驗證、存新 merchant_trade_no、簽章
+  ├───────────────────────────────▶│ 驗證；有歷史編號先對帳；寫入 ecpay_trades、簽章
   │◀── 自動送出的 HTML 表單 ────────┤                               │
   │ POST AioCheckOut/V5 ───────────┼──────────────────────────────▶│
   │◀── 付款頁，使用者完成付款 ───────┼───────────────────────────────┤
@@ -481,8 +498,8 @@ session_id（無資料表）1─* cart_items
   │ POST /api/orders/:id/check-payment                              │
   ├───────────────────────────────▶│ POST QueryTradeInfo/V5 ──────▶│
   │                                │◀── 交易狀態與 CheckMacValue ───┤
-  │                                │ 驗 CMV → 驗金額 → 驗 TradeStatus
-  │◀── { status: 'paid' } ─────────┤ transaction 內更新為 paid      │
+  │                                │ 逐筆：驗 CMV → 驗 TradeStatus → 已付款才驗金額
+  │◀── { status: 'paid' } ─────────┤ 任一筆已付款，transaction 內轉 paid │
 ```
 
 綠界不會連回本站，瀏覽器帶回的 `?payment=` 也只影響提示文字；**唯一能把訂單改為已付款的綠界路徑，是通過驗證的 `QueryTradeInfo` 回應**。逐步行為與錯誤見 [FEATURES.md](./FEATURES.md#ecpay-金流aio)。
@@ -513,8 +530,8 @@ pending ────────────────────────
 
 | 模組 | 職責 |
 | --- | --- |
-| `src/services/ecpay.js` | 純粹的綠界邏輯：`generateCheckMacValue`、`verifyCheckMacValue`（`timingSafeEqual`）、`generateMerchantTradeNo`、`buildAioParams`、`queryTradeInfo`。只用內建 `crypto` 與原生 `fetch`，沒有新增相依套件，也不碰資料庫 |
-| `src/routes/ecpayRoutes.js` | 認證、訂單存取、狀態更新與回應格式 |
+| `src/services/ecpay.js` | 純粹的綠界邏輯：`generateCheckMacValue`、`verifyCheckMacValue`（`timingSafeEqual`）、`generateMerchantTradeNo`（含 4 碼隨機）、`buildAioParams`、`queryTradeInfo`（10 秒逾時，錯誤帶 HTTP `status`）。只用內建 `crypto` 與原生 `fetch`，沒有新增相依套件，也不碰資料庫 |
+| `src/routes/ecpayRoutes.js` | 認證、訂單存取、狀態更新與回應格式；`reconcileOrderPayment` 負責逐筆對帳（付款頁重入與 `check-payment` 共用） |
 
 **為什麼用主動查詢：** 專案在 localhost 執行，綠界無法呼叫 `ReturnURL`。`ReturnURL` 是綠界必填欄位，所以仍填 `${BASE_URL}/api/ecpay/notify`，但這個路由刻意沒有實作。同樣的原因，也沒有使用 `OrderResultURL`。
 
@@ -527,7 +544,6 @@ pending ────────────────────────
 - `/ecpay/payment/:orderId` 不要再用查詢參數傳 JWT，改用短效的一次性憑證或 POST。
 - 使用專屬商店帳號，`ECPAY_HASH_KEY`、`ECPAY_HASH_IV` 不得進版控，並設定 `ECPAY_ENV=production`。
 - `total_amount` 不含運費，但前端顯示的總計含運費。目前向綠界請款的是**不含運費**的金額，要先統一。
-- `merchant_trade_no` 只保留最新一筆，付款後重新進入付款頁會查不到舊交易，正式環境應保存每次發起的編號。
 
 ### 其他外部資源
 

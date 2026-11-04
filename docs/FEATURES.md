@@ -12,7 +12,7 @@
 | 商品列表與詳情 API | ✅ | ✅ | 無搜尋、分類、排序參數 |
 | 訪客購物車 | ✅ | ✅ | `X-Session-Id` |
 | 會員購物車 | ✅ | ⚠️ | 測試僅涵蓋加入 |
-| 訪客車併入會員車 | ❌ | — | 登入後看不到訪客車 |
+| 訪客車併入會員車 | ✅ | ✅ | 登入或註冊成功時合併；同商品數量相加，以庫存為上限 |
 | 建立訂單（扣庫存、清空車） | ✅ | ⚠️ | 未驗證庫存實際扣減與庫存不足 |
 | 訂單列表與詳情 | ✅ | ✅ | 列表無分頁 |
 | 模擬付款 | ✅ | ❌ | `PATCH /api/orders/:id/pay`，保留供開發測試；頁面已無按鈕 |
@@ -39,7 +39,7 @@
 | `NOT_FOUND` | 404 | 資源不存在或不屬於本人；未定義的 `/api` 路徑 |
 | `CONFLICT` | 409 | Email 已註冊；刪除有 `pending` 訂單的商品 |
 | `INTERNAL_ERROR` | 500 或其他 | `errorHandler` 的固定錯誤碼；無效 JSON 時狀態碼是 400 但錯誤碼仍是這個 |
-| `PAYMENT_NOT_STARTED` | 400 | 尚未發起綠界付款即查詢（`merchant_trade_no` 為 null） |
+| `PAYMENT_NOT_STARTED` | 400 | 尚未發起綠界付款即查詢（該訂單在 `ecpay_trades` 沒有任何編號） |
 | `ECPAY_QUERY_FAILED` | 502 | 綠界連線失敗、CheckMacValue 不符或交易金額不符 |
 
 ## 認證
@@ -66,7 +66,8 @@
 {
   "data": {
     "user": { "id": "uuid", "email": "a@example.com", "name": "小明", "role": "user" },
-    "token": "eyJ..."
+    "token": "eyJ...",
+    "cart_merge": { "merged": 0, "adjusted": 0 }
   },
   "error": null,
   "message": "註冊成功"
@@ -158,14 +159,19 @@ Body：`email`、`password` 皆必填。登入不檢查 Email 格式，也不檢
 
 前端永遠同時送出兩者，所以登入中一定走會員模式。
 
-**訪客車與會員車完全分離，且沒有合併邏輯：**
+**訪客車在登入或註冊成功時併入會員車**（`src/services/cart.js` 的 `mergeGuestCart`）。登入與註冊請求須帶 `X-Session-Id`，前端的 `apiFetch` 一律會送；帳密錯誤或驗證失敗時不合併。
 
-1. 訪客把商品加入購物車（存於 `session_id`）。
-2. 訪客點「前往結帳」，導向 `/login?redirect=/checkout`。
-3. 登入後導回 `/checkout`，會員車是空的，於是被導向 `/cart` 並顯示空車。
-4. 登出後 `flower_session_id` 仍保留，原本的訪客車商品會再次出現。
+| 情境 | 結果 |
+| --- | --- |
+| 會員車沒有此商品 | 整列改歸會員；數量超過庫存時降為庫存量 |
+| 會員車已有此商品 | 數量相加，以庫存為上限，但不調低會員車原有數量 |
+| 庫存為 0 且會員車沒有此商品 | 移除訪客列，不併入 |
 
-串接前端或實作合併功能時要特別注意這個流程。
+- 登入與註冊回應的 `data.cart_merge` 為 `{ merged, adjusted }`：`merged` 是數量有增加的品項數，`adjusted` 是因庫存被調整或移除的品項數。未帶 `X-Session-Id` 或合併失敗時皆為 0。
+- `adjusted > 0` 時，前端在下一頁以 toast 提示使用者確認數量。
+- 訪客列在同一個 transaction 內全數移轉或刪除，重複登入不會重複累加，登出後也不會再看到已合併的商品。
+- 合併失敗不阻擋登入：transaction 回滾、訪客車保留，下次登入可再合併。
+- 只合併當前瀏覽器的訪客車；共用電腦時，訪客車會併入下一個登入的帳號。
 
 `X-Session-Id` 不綁定使用者，也沒有到期機制，知道 ID 就能存取該購物車；訪客車資料不會自動清除。
 
@@ -327,10 +333,10 @@ Body：`action` 必填，`success` 或 `fail`。
 
 1. 結帳建立訂單（`pending`），庫存在此時已扣除。
 2. 訂單詳情頁按「前往綠界付款」，瀏覽器前往 `/ecpay/payment/:orderId?token=<JWT>`。
-3. 伺服器產生新的 `MerchantTradeNo` 並存入訂單，回傳自動送出的表單，瀏覽器 POST 至綠界。
+3. 伺服器產生新的 `MerchantTradeNo`，寫入 `ecpay_trades` 並更新 `orders.merchant_trade_no`，回傳自動送出的表單，瀏覽器 POST 至綠界。若該訂單已有歷史編號，會先對帳（見下節）。
 4. 使用者在綠界完成付款，按「返回商店」，導回 `/orders/:orderId?payment=pending`。
 5. 使用者按「查詢付款狀態」，前端呼叫 `POST /api/orders/:id/check-payment`。
-6. 後端驗證通過後把訂單改為 `paid`。
+6. 後端逐筆查詢該訂單**所有**歷史編號，任一筆驗證為已付款就把訂單改為 `paid`。
 
 測試環境可用信用卡 `4311-9522-2222-2222`，3D 驗證碼 `1234`。
 
@@ -338,7 +344,22 @@ Body：`action` 必填，`success` 或 `fail`。
 
 由瀏覽器直接前往，所以無法帶 `Authorization` header，改用查詢參數 `?token=<JWT>` 傳遞，由 `ecpayRoutes.js` 內的 `queryAuth` 驗證。這個路由回傳的是 HTML，**錯誤也是純文字，不是 `{ data, error, message }`**。
 
-成功時回傳 `views/pages/ecpay-redirect.ejs`，頁面載入後自動把表單 POST 至綠界。**每次呼叫都會產生新的 `MerchantTradeNo` 並覆寫訂單上的舊值**。
+成功時回傳 `views/pages/ecpay-redirect.ejs`，頁面載入後自動把表單 POST 至綠界。每次發出表單都會產生新的 `MerchantTradeNo`，寫入 `ecpay_trades`（保留全部歷史），並把 `orders.merchant_trade_no` 更新為最新一筆。
+
+本專案收不到綠界通知，本地 `pending` 不代表尚未付款。因此**重入付款頁時，若訂單已有歷史編號，會先呼叫 `reconcileOrderPayment` 對帳**，避免使用者付款後按到上一頁或「前往綠界付款」而重複扣款。判斷由上而下：
+
+| 情境 | 回應 | 是否產生新編號 |
+| --- | --- | --- |
+| 訂單不存在或非本人 | 404 | 否 |
+| 訂單已是 `paid` | **302 導向 `/orders/:id`**，不呼叫綠界 | 否 |
+| 訂單已是 `failed` | 400 | 否 |
+| `pending`、有歷史編號，對帳發現已付款 | 轉 `paid`，302 導向 `/orders/:id` | 否 |
+| `pending`、有歷史編號，對帳無法確認（連線失敗、簽章或金額異常） | **502 純文字，不放行**（寧可不讓付款，也不冒重複扣款的風險） | 否 |
+| `pending`、歷史編號已達 10 筆且皆未付款 | 400 | 否 |
+| 其他（含首次進入，此時不呼叫綠界） | 200 付款表單 | 是 |
+
+- 對帳的 `await` 結束後會**重新讀取訂單**，再於同步的 transaction 中寫入新編號，避免對帳期間訂單被其他請求改變。
+- 每筆訂單最多 10 個編號：每次重入都會查全部歷史，若無上限，反覆重整可能觸發綠界 403（限流依 IP＋MerchantID，須等 30 分鐘，會讓全站查詢停擺）。
 
 | 狀態 | 回應文字 | 情境 |
 | --- | --- | --- |
@@ -346,13 +367,15 @@ Body：`action` 必填，`success` 或 `fail`。
 | 401 | `Token 無效或已過期，請重新登入` | 驗證失敗或過期 |
 | 401 | `使用者不存在` | token 有效但使用者已不存在 |
 | 404 | `訂單不存在` | 訂單不存在或非本人 |
-| 400 | `訂單狀態不是 pending，無法付款` | 訂單已是 `paid` 或 `failed` |
+| 400 | `訂單狀態不是 pending，無法付款` | 訂單為 `failed`（`paid` 改為 302 導向訂單頁） |
+| 400 | `此訂單發起付款次數已達上限，請重新下單或聯繫客服` | 已有 10 個編號且皆未付款 |
+| 502 | `暫時無法確認先前的付款狀態，請稍後再試` | 重入時對帳失敗 |
 
 送交綠界的主要參數（`src/services/ecpay.js` 的 `buildAioParams`）：
 
 | 參數 | 值 | 說明 |
 | --- | --- | --- |
-| `MerchantTradeNo` | 16 碼大寫英數 | 訂單 UUID 去掉連字號後的前 8 碼 + 毫秒時間戳十六進位的末 8 碼。訂單編號 `ORD-...` 含 `-`，不能直接使用 |
+| `MerchantTradeNo` | 20 碼大寫英數 | 訂單 UUID 去掉連字號後的前 8 碼 + 毫秒時間戳十六進位的末 8 碼 + 4 碼隨機 hex（避免同毫秒撞號違反 `ecpay_trades` 的 UNIQUE）。訂單編號 `ORD-...` 含 `-`，不能直接使用 |
 | `MerchantTradeDate` | `yyyy/MM/dd HH:mm:ss` | 固定為 UTC+8，與伺服器時區無關 |
 | `TotalAmount` | `orders.total_amount` | **不含前端顯示的運費**，見下方已知限制 |
 | `ItemName` | `名稱 x數量`，以 `#` 連接 | 名稱中的控制字元與 `#` 會被移除；超過 400 字時截斷為 397 字加 `...` |
@@ -363,24 +386,32 @@ Body：`action` 必填，`success` 或 `fail`。
 
 ### `POST /api/orders/:id/check-payment`
 
-需 JWT，不需要 body。依下表**由上而下**判斷，所以訂單若從未發起綠界付款，即使已用模擬付款標成 `paid`，也會得到 `PAYMENT_NOT_STARTED`。
+需 JWT，不需要 body。依下表**由上而下**判斷，所以訂單若從未發起綠界付款（`ecpay_trades` 無紀錄），即使已用模擬付款標成 `paid`，也會得到 `PAYMENT_NOT_STARTED`。
+
+對帳邏輯（`reconcileOrderPayment`，付款頁重入時共用）：依序查詢該訂單**所有**編號，每筆間隔 200ms；不在第一筆已付款時停止，才能發現重複扣款。
 
 | 情境 | 狀態 | 錯誤碼 | `data` | 訊息 |
 | --- | --- | --- | --- | --- |
 | 訂單不存在或非本人 | 404 | `NOT_FOUND` | `null` | `訂單不存在` |
-| `merchant_trade_no` 為空 | 400 | `PAYMENT_NOT_STARTED` | `null` | `尚未發起綠界付款` |
+| 該訂單沒有任何交易編號 | 400 | `PAYMENT_NOT_STARTED` | `null` | `尚未發起綠界付款` |
 | 訂單已是 `paid` | 200 | — | `{ status: 'paid' }` | `訂單已付款`（不呼叫綠界） |
 | 訂單已是 `failed` | 200 | — | `{ status: 'failed' }` | `訂單狀態異常`（不呼叫綠界） |
-| 連線失敗或綠界回非 2xx | 502 | `ECPAY_QUERY_FAILED` | `null` | `綠界查詢失敗：<原因>` |
-| 回傳的 CheckMacValue 不符 | 502 | `ECPAY_QUERY_FAILED` | `null` | `回傳 CheckMacValue 驗證失敗` |
-| `TradeAmt` 不等於 `total_amount` | 502 | `ECPAY_QUERY_FAILED` | `null` | `交易金額不符` |
-| `TradeStatus` 不是 `'1'` | 200 | — | `{ status: 'pending', trade_status }` | `尚未完成付款` |
-| `TradeStatus` 是 `'1'` | 200 | — | `{ status: 'paid' }` | `付款成功` |
+| 任一筆已付款（`TradeStatus='1'` 且金額相符） | 200 | — | `{ status: 'paid' }` | `付款成功` |
+| 無已付款，但有編號無法確認：連線失敗、非 2xx、逾時（10 秒） | 502 | `ECPAY_QUERY_FAILED` | `null` | `綠界查詢失敗：<原因>` |
+| 同上，CheckMacValue 不符 | 502 | `ECPAY_QUERY_FAILED` | `null` | `回傳 CheckMacValue 驗證失敗` |
+| 同上，回傳的 `MerchantTradeNo` 與查詢值不符 | 502 | `ECPAY_QUERY_FAILED` | `null` | `回傳交易編號不符` |
+| 同上，已付款但 `TradeAmt` 不等於 `total_amount` | 502 | `ECPAY_QUERY_FAILED` | `null` | `交易金額不符` |
+| 全部編號皆未付款 | 200 | — | `{ status: 'pending', trade_status: <最新一筆> }` | `尚未完成付款` |
 
 注意事項：
 
 - 非 `pending` 訂單回 200 而不是 `INVALID_STATUS`，因此重複查詢是安全的，呼叫端要讀 `data.status` 判斷結果。
-- 金額比對排在 `TradeStatus` 之前，即使交易尚未付款，金額不符也會回 502。
+- **只比對已付款交易的金額。** 綠界對未送達的編號回 HTTP 200、`TradeStatus=10200047`、`TradeAmt=0` 且簽章有效，視為「未付款」而非金額不符；先前會誤報 502。
+- **已付款優先於其他編號的失敗**：一筆已付款、另一筆連線失敗，仍轉 `paid`。無已付款但有失敗時，不可斷言未付款，回 502。
+- **多筆已付款**視為重複扣款：訂單採最早一筆的 `ecpay_trade_no`、`payment_type`、`paid_at`，並把 `orders.merchant_trade_no` 改為該筆；`console.error` 記錄訂單與編號，兩筆的 `ecpay_trades.trade_status` 都留作退款依據。目前沒有後台介面或自動退款。
+- 收到綠界 403（限流）時立即停止查詢後續編號，回 502。
+- 每筆通過簽章驗證的結果都會寫回 `ecpay_trades.trade_status`、`checked_at`。
+- 冪等：訊息依 `UPDATE` 的 `changes` 與更新後狀態決定；併發的兩次查詢皆回 `paid`，付款欄位只寫一次。
 - 信用卡付款後銀行尚未回覆時，`TradeStatus` 可能暫時是 `0`，稍後再查即可。
 - 更新在 `db.transaction()` 內以 `UPDATE ... WHERE status='pending'` 執行，並寫入 `ecpay_trade_no`（`TradeNo`）、`payment_type`（`PaymentType`）、`paid_at`（`PaymentDate`）。
 - 這是專案唯一的 `async` handler，例外由 handler 自行 `next(err)`。
@@ -480,9 +511,11 @@ Body：`action` 必填，`success` 或 `fail`。
 | `PATCH /api/orders/:id/pay` 可由訂單擁有者直接標記為已付款 | 可完全繞過綠界；模擬用途可接受，上線前必須移除或限制 |
 | 運費只在前端顯示 | 小計未滿 500 時，結帳頁金額與訂單金額不同，**實際向綠界請款的是不含運費的 `total_amount`** |
 | 付款失敗不回補庫存、也不能重試，但 `?payment=failed` 的文字寫「付款失敗，請重試」 | 庫存永久減少；文字與行為不符。目前只有直接呼叫模擬付款 API 才會產生 `failed` |
-| 重新進入 `/ecpay/payment/:orderId` 會覆寫 `merchant_trade_no` | 付款完成後若再次進入（例如按上一頁），之後只會查詢新編號，已付款的舊交易查不到，訂單停在 `pending` |
+| 銀行回覆延遲（綠界說明約 10 分鐘內 `TradeStatus` 仍可能是 `0`） | 此期間重入付款頁仍可能產生新編號而重複付款 |
+| 已取得 ATM／超商代碼（狀態 `0`）的舊單 | 日後仍可能與新單都被付款 |
+| 訂單轉 `paid` 後才在舊分頁付款 | 收不到通知也不會再查詢；根治須實作 `ReturnURL` |
+| 修正前已被覆寫而遺失的舊編號 | 無法自動復原，須到綠界後台比對後人工處理 |
 | 沒有實作 `ReturnURL` 的 Server Notify | 使用者付款後沒按查詢，訂單就不會更新；部署到公開網址前應補上 |
-| 訪客車不會併入會員車 | 訪客登入結帳時購物車看似消失 |
 | 後台無法變更訂單狀態，也無取消功能 | `pending` 訂單會持續占用庫存並阻擋商品刪除 |
 
 ### 錯誤處理

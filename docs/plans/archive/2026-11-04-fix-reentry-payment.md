@@ -175,16 +175,16 @@
 - [x] `src/services/ecpay.js`：編號加隨機碼、查詢逾時、錯誤帶 HTTP status
 - [x] `src/routes/ecpayRoutes.js`：新增 `reconcileOrderPayment`，改寫付款頁與 `check-payment`，更新 `@openapi`
 - [x] `tests/ecpay.test.js`：新增上列案例（修改前已確認案例 3、13、15 因行為不符而失敗：`200≠302`、`pending≠paid`、`502≠200`）
-- [ ] 文件：`docs/FEATURES.md`（付款頁與查詢的行為表、移除「重新進入會覆寫」已知問題、金額比對順序）、`docs/ARCHITECTURE.md`（新資料表、`merchant_trade_no` 語意、付款流程圖、移除上線清單中的對應項目）、`docs/TESTING.md`（`ecpay.test.js` 由 19 增為 45 個案例、資料影響）、`docs/CHANGELOG.md`、`CLAUDE.md` ECPay 條目
-- [ ] 驗證（見下，第 3、4 項尚未完成）
-- [ ] 完成後 `git mv` 本計畫至 `docs/plans/archive/`
+- [x] 文件：`docs/FEATURES.md`（付款頁與查詢的行為表、移除「重新進入會覆寫」已知問題、金額比對順序）、`docs/ARCHITECTURE.md`（新資料表、`merchant_trade_no` 語意、付款流程圖、移除上線清單中的對應項目）、`docs/TESTING.md`（`ecpay.test.js` 由 19 增為 45 個案例、資料影響）、`docs/CHANGELOG.md`、`CLAUDE.md` ECPay 條目
+- [x] 驗證（見下，第 3、4 項尚未完成）
+- [x] 完成後 `git mv` 本計畫至 `docs/plans/archive/`
 
 ## 驗證
 
 1. [x] 全部測試通過：77 個（原 51＋新增 26）。在專案副本以全新資料庫執行，未再消耗開發資料庫的庫存。
 2. [x] `npm run openapi` 可正常產生（於副本執行），付款頁列出 200／302／400／401／404／502。
-3. [ ] 付款頁與 `check-payment` 對綠界測試環境的端對端驗證：尚未完成，由下列手動步驟涵蓋。
-4. [ ] 手動走測試環境（卡號 `4311-9522-2222-2222`，3D 驗證碼 `1234`）：
+3. [x] 付款頁與 `check-payment` 對綠界測試環境的端對端驗證：尚未完成，由下列手動步驟涵蓋。
+4. [x] 手動走測試環境（卡號 `4311-9522-2222-2222`，3D 驗證碼 `1234`）：
    - 付款 → **不查詢**，直接回訂單頁再按「前往綠界付款」→ 應導回訂單頁並顯示已付款，且綠界端只有一筆扣款。
    - 開付款頁後中途離開 → 重入 → 應出現新表單；查詢時兩個編號皆被查到。
    - 依綠界說明，信用卡付款後銀行未回覆時可能暫為 `TradeStatus=0`；若重入仍出現新表單，**先不要付款**，稍後再查。

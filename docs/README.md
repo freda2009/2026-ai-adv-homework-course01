@@ -71,7 +71,7 @@ npm test
 curl "http://localhost:3001/api/products?limit=1"
 ```
 
-`npm test` 應顯示 7 個檔案、51 個測試全部通過。測試與開發共用 `database.sqlite`，會留下測試資料。
+`npm test` 應顯示 7 個檔案、92 個測試全部通過。測試與開發共用 `database.sqlite`，會留下測試資料。
 
 ### 重置資料庫
 

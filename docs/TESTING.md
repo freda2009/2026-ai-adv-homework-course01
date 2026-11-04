@@ -7,7 +7,7 @@
 | 框架 | Vitest 2.1.9 + Supertest 7.2.2 |
 | 類型 | API 整合測試：經過完整 Express middleware，寫入真實 SQLite |
 | 未涵蓋 | 頁面路由、前端腳本、獨立的單元測試 |
-| 規模 | 7 個測試檔、51 個測試 |
+| 規模 | 7 個測試檔、92 個測試 |
 | Mock | 只有 `ecpay.test.js` 以 `vi.spyOn(global, 'fetch')` 模擬綠界回應；其他皆無。測試不會連線到綠界 |
 | 覆蓋率 | 未安裝 `@vitest/coverage-*`，目前無法產生覆蓋率報告 |
 
@@ -43,11 +43,11 @@ npx vitest run --reporter=verbose                     # 列出每個測試
 | --- | --- | --- | --- |
 | `auth.test.js` | 6 | 註冊成功／重複 Email、登入成功／密碼錯誤、profile 有無 token | 無（只用 `app`、`request`） |
 | `products.test.js` | 4 | 列表、分頁、詳情、不存在 | 無 |
-| `cart.test.js` | 6 | 訪客模式新增／查詢／修改／刪除、會員新增、商品不存在 | `registerUser` |
+| `cart.test.js` | 21 | 訪客模式新增／查詢／修改／刪除、會員新增、商品不存在；訪客車併入會員車（登入、註冊、相加、庫存上限、重複登入、失敗回滾、合併後下單） | `registerUser` |
 | `orders.test.js` | 6 | 建立、空車、未登入、列表、詳情、不存在 | `registerUser` |
 | `adminProducts.test.js` | 6 | 列表、新增、修改、刪除、一般使用者 403、未登入 401 | `getAdminToken`、`registerUser` |
 | `adminOrders.test.js` | 4 | 列表、狀態篩選、詳情、一般使用者 403 | `getAdminToken`、`registerUser` |
-| `ecpay.test.js` | 19 | CheckMacValue 向量（5 筆，由 JSON 動態產生）與驗證、`MerchantTradeNo` 格式、付款表單的 401／404／200、`check-payment` 的 `PAYMENT_NOT_STARTED`／404／轉為 `paid`／冪等／未付款／金額不符／CMV 不符 | `registerUser` |
+| `ecpay.test.js` | 45 | CheckMacValue 向量（5 筆，由 JSON 動態產生）與驗證、`MerchantTradeNo` 格式、付款表單的 401／404／200、`check-payment` 的 `PAYMENT_NOT_STARTED`／404／轉為 `paid`／冪等／未付款／金額不符／CMV 不符 | `registerUser` |
 
 ### 尚未涵蓋的情境
 
@@ -213,12 +213,13 @@ expect(res.body).toHaveProperty('error', 'VALIDATION_ERROR');
 
 ### 1. 測試會修改開發資料庫
 
-`src/database.js` 把路徑固定為 `database.sqlite`，測試**沒有隔離的資料庫**，也沒有清理或回滾。從全新資料庫執行一次 `npm test` 的結果（前 6 個檔案為實測，再加上依程式碼推算的 `ecpay.test.js`）：
+`src/database.js` 把路徑固定為 `database.sqlite`，測試**沒有隔離的資料庫**，也沒有清理或回滾。從全新資料庫執行一次 `npm test` 的實測結果：
 
 | 資料 | 變化 |
 | --- | --- |
-| `users` | 新增 13 筆（`ecpay.test.js` 佔 7 筆） |
-| `orders` | 新增 7 筆（`ecpay.test.js` 佔 5 筆，其中 1 筆為 `paid`） |
+| `users` | 新增 54 筆 |
+| `orders` | 新增 33 筆（其中 12 筆為 `paid`） |
+| `ecpay_trades` | 新增 59 筆 |
 | `cart_items` | 留下 1 筆（`cart.test.js` 的會員新增未清理） |
 | `products[0]` 庫存 | 減少 7（`orders`、`adminOrders` 各 1 件，`ecpay` 5 件） |
 
