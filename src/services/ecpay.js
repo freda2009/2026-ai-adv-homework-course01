@@ -11,6 +11,8 @@ const QUERY_URL = isStaging
   ? 'https://payment-stage.ecpay.com.tw/Cashier/QueryTradeInfo/V5'
   : 'https://payment.ecpay.com.tw/Cashier/QueryTradeInfo/V5';
 
+const QUERY_TIMEOUT_MS = 10000;
+
 // ECPay 專用 URL encode：urlencode → toLowerCase → .NET 特殊字元還原
 function ecpayUrlEncode(source) {
   let encoded = encodeURIComponent(source)
@@ -49,11 +51,12 @@ function verifyCheckMacValue(params, hashKey, hashIv) {
   return crypto.timingSafeEqual(a, b);
 }
 
-// 產生唯一 MerchantTradeNo：英數、≤20 字
+// 產生唯一 MerchantTradeNo：英數、≤20 字（8 碼訂單＋8 碼時間＋4 碼隨機，避免同毫秒撞號）
 function generateMerchantTradeNo(orderId) {
   const orderPrefix = orderId.replace(/-/g, '').slice(0, 8).toUpperCase();
   const tsHex = Date.now().toString(16).toUpperCase().padStart(13, '0').slice(-8);
-  return orderPrefix + tsHex;
+  const random = crypto.randomBytes(2).toString('hex').toUpperCase();
+  return orderPrefix + tsHex + random;
 }
 
 // ECPay 要求 UTC+8，格式 yyyy/MM/dd HH:mm:ss
@@ -114,10 +117,13 @@ async function queryTradeInfo(merchantTradeNo) {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
+    signal: AbortSignal.timeout(QUERY_TIMEOUT_MS),
   });
 
   if (!response.ok) {
-    throw new Error(`QueryTradeInfo HTTP ${response.status}`);
+    const err = new Error(`QueryTradeInfo HTTP ${response.status}`);
+    err.status = response.status;
+    throw err;
   }
 
   const text = await response.text();
