@@ -1,4 +1,4 @@
-# 花漾生活 Flower Life
+# [ 此專案是AI開發進化營的作業]花漾生活 Flower Life
 
 花卉電商示範專案。單一 Express 應用同時提供 REST API 與伺服器渲染頁面，資料存放於本機 SQLite 檔案，不需要額外的資料庫服務。
 
@@ -7,6 +7,19 @@
 - **API**：20 個 REST 操作（15 個路徑），另有 1 個產生綠界付款表單的瀏覽器導向路由，可由註解產生 OpenAPI 3.0.3 規格
 
 > 付款使用**綠界 ECPay AIO**。本專案設計為在 localhost 執行，收不到綠界的 Server Notify，因此付款結果由使用者按「查詢付款狀態」後，後端主動呼叫 `QueryTradeInfo` 驗證。舊的模擬付款 API `PATCH /api/orders/:id/pay` 仍保留，但頁面已不再提供按鈕。詳見 [ARCHITECTURE.md](./ARCHITECTURE.md#金流與第三方整合)。
+----------測試用帳號&密碼-----
+ADMIN_EMAIL=admin@hexschool.com
+ADMIN_PASSWORD=12345678
+
+新註冊帳號=test2@test.com
+新註冊帳號PASSWORD=qwerty
+
+### 綠界信用卡測試卡資訊
+ - 信用卡：4311-9522-2222-2222
+ - 有效年月：任意未來日期 (12/2030)
+ - 安全碼：  222 
+ - 3D 驗證：1234
+ - 
 
 ## 技術棧
 
