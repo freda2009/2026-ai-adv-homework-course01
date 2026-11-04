@@ -34,6 +34,11 @@ app.use('/api/products', require('./src/routes/productRoutes'));
 app.use('/api/cart', require('./src/routes/cartRoutes'));
 app.use('/api/orders', require('./src/routes/orderRoutes'));
 
+// ECPay Routes
+const ecpayRoutes = require('./src/routes/ecpayRoutes');
+app.use('/ecpay', ecpayRoutes.pageRouter);
+app.use('/api/orders', ecpayRoutes.apiRouter);
+
 // Page Routes
 app.use('/', require('./src/routes/pageRoutes'));
 

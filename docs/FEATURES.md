@@ -15,8 +15,8 @@
 | 訪客車併入會員車 | ❌ | — | 登入後看不到訪客車 |
 | 建立訂單（扣庫存、清空車） | ✅ | ⚠️ | 未驗證庫存實際扣減與庫存不足 |
 | 訂單列表與詳情 | ✅ | ✅ | 列表無分頁 |
-| 模擬付款 | ⚠️ | ❌ | 僅模擬，無金流 |
-| ECPay 金流 | ❌ | — | 只有環境變數預留 |
+| 模擬付款 | ✅ | ❌ | `PATCH /api/orders/:id/pay`，保留供開發測試 |
+| ECPay 金流 AIO | ✅ | ✅ | `GET /ecpay/payment/:orderId`（付款）、`POST /api/orders/:id/check-payment`（查詢） |
 | 運費 | ⚠️ | ❌ | 僅前端顯示，不計入訂單金額 |
 | 後台商品 CRUD | ✅ | ✅ | 未測試 409 與驗證錯誤 |
 | 後台訂單列表與詳情 | ✅ | ✅ | 無法變更狀態 |
@@ -39,6 +39,8 @@
 | `NOT_FOUND` | 404 | 資源不存在或不屬於本人；未定義的 `/api` 路徑 |
 | `CONFLICT` | 409 | Email 已註冊；刪除有 `pending` 訂單的商品 |
 | `INTERNAL_ERROR` | 500 或其他 | `errorHandler` 的固定錯誤碼；無效 JSON 時狀態碼是 400 但錯誤碼仍是這個 |
+| `PAYMENT_NOT_STARTED` | 400 | 尚未發起綠界付款即查詢（`merchant_trade_no` 為 null） |
+| `ECPAY_QUERY_FAILED` | 502 | 綠界連線失敗、CheckMacValue 不符或交易金額不符 |
 
 ## 認證
 

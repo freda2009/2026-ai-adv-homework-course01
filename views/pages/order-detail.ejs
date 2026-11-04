@@ -71,20 +71,19 @@
     </div>
 
     <!-- Payment Buttons -->
-    <div v-if="order.status === 'pending'" class="flex gap-4">
-      <button
-        @click="handlePaySuccess"
-        :disabled="paying"
-        class="bg-sage text-white px-8 py-3 rounded-full text-sm font-medium hover:bg-sage/90 transition-colors disabled:opacity-50"
+    <div v-if="order.status === 'pending'" class="flex gap-4 flex-wrap">
+      <a
+        :href="ecpayUrl"
+        class="bg-sage text-white px-8 py-3 rounded-full text-sm font-medium hover:bg-sage/90 transition-colors inline-block text-center"
       >
-        {{ paying ? '處理中...' : '付款成功' }}
-      </button>
+        前往綠界付款
+      </a>
       <button
-        @click="handlePayFail"
-        :disabled="paying"
-        class="bg-red-500 text-white px-8 py-3 rounded-full text-sm font-medium hover:bg-red-600 transition-colors disabled:opacity-50"
+        @click="checkPayment"
+        :disabled="checking"
+        class="border border-sage text-sage px-8 py-3 rounded-full text-sm font-medium hover:bg-sage/10 transition-colors disabled:opacity-50"
       >
-        {{ paying ? '處理中...' : '付款失敗' }}
+        {{ checking ? '查詢中...' : '查詢付款狀態' }}
       </button>
     </div>
   </template>

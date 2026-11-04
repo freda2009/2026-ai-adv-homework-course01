@@ -68,6 +68,19 @@ function initializeDatabase() {
     );
   `);
 
+  // Idempotent migration: add ECPay columns to orders
+  const ordersColumns = db.pragma('table_info(orders)').map(c => c.name);
+  for (const [col, type] of [
+    ['merchant_trade_no', 'TEXT'],
+    ['ecpay_trade_no', 'TEXT'],
+    ['payment_type', 'TEXT'],
+    ['paid_at', 'TEXT'],
+  ]) {
+    if (!ordersColumns.includes(col)) {
+      db.exec(`ALTER TABLE orders ADD COLUMN ${col} ${type}`);
+    }
+  }
+
   // Seed data
   seedAdminUser();
   seedProducts();

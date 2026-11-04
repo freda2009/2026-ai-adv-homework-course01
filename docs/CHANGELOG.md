@@ -10,6 +10,7 @@
 
 - 專案文件：`CLAUDE.md`、`docs/README.md`、`docs/ARCHITECTURE.md`、`docs/DEVELOPMENT.md`、`docs/FEATURES.md`、`docs/TESTING.md`、`docs/CHANGELOG.md`。
 - 開發計畫目錄 `docs/plans/` 與歸檔目錄 `docs/plans/archive/`。
+- **ECPay AIO 金流串接**：`GET /ecpay/payment/:orderId` 產生自動送出付款表單；`POST /api/orders/:id/check-payment` 呼叫 QueryTradeInfo 驗證並更新訂單狀態；`src/services/ecpay.js`（CheckMacValue SHA256、buildAioParams、queryTradeInfo）；`orders` 資料表新增 `merchant_trade_no`、`ecpay_trade_no`、`payment_type`、`paid_at` 四欄；新增錯誤碼 `PAYMENT_NOT_STARTED`、`ECPAY_QUERY_FAILED`；新增測試 `tests/ecpay.test.js`（CMV 向量 + API 整合測試）。
 
 ## [1.0.0] - 2026-11-03
 
@@ -29,6 +30,6 @@
 
 ### 尚未包含
 
-- ECPay 金流：僅有預留的環境變數。
+- ~~ECPay 金流：僅有預留的環境變數。~~（已實作）
 - 運費：僅前端顯示，不計入訂單金額。
 - 訪客車併入會員車、取消訂單、後台修改訂單狀態。

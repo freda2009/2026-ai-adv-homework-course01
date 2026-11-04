@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>正在前往綠界付款...</title>
+  <style>
+    body { font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #fdf8f5; }
+    p { color: #888; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <p>正在導向綠界付款頁，請稍候...</p>
+  <form id="ecpay-form" method="POST" action="<%= action %>">
+    <% for (const [key, value] of Object.entries(params)) { %>
+      <input type="hidden" name="<%= key %>" value="<%= value %>">
+    <% } %>
+  </form>
+  <script>document.getElementById('ecpay-form').submit();</script>
+</body>
+</html>
