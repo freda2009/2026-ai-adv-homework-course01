@@ -2,11 +2,11 @@
 
 花卉電商示範專案。單一 Express 應用同時提供 REST API 與伺服器渲染頁面，資料存放於本機 SQLite 檔案，不需要額外的資料庫服務。
 
-- **前台**：商品瀏覽、訪客／會員購物車、結帳、訂單查詢、模擬付款
+- **前台**：商品瀏覽、訪客／會員購物車、結帳、訂單查詢、綠界 ECPay 付款
 - **後台**：商品 CRUD、訂單查詢與狀態篩選
-- **API**：19 個 REST 操作（14 個路徑），可由註解產生 OpenAPI 3.0.3 規格
+- **API**：20 個 REST 操作（15 個路徑），另有 1 個產生綠界付款表單的瀏覽器導向路由，可由註解產生 OpenAPI 3.0.3 規格
 
-> 付款目前是**模擬流程**（頁面上的「付款成功／付款失敗」按鈕）。`.env.example` 雖有 ECPay 設定，但尚無任何串接程式碼，詳見 [ARCHITECTURE.md](./ARCHITECTURE.md#金流與第三方整合)。
+> 付款使用**綠界 ECPay AIO**。本專案設計為在 localhost 執行，收不到綠界的 Server Notify，因此付款結果由使用者按「查詢付款狀態」後，後端主動呼叫 `QueryTradeInfo` 驗證。舊的模擬付款 API `PATCH /api/orders/:id/pay` 仍保留，但頁面已不再提供按鈕。詳見 [ARCHITECTURE.md](./ARCHITECTURE.md#金流與第三方整合)。
 
 ## 技術棧
 
@@ -50,6 +50,8 @@ npm start
 
 > 測試程式把這組帳密寫死。修改後 `npm test` 會失敗，詳見 [TESTING.md](./TESTING.md#常見陷阱)。
 
+**測試付款**：`.env.example` 已附綠界公開測試帳號，複製後即可使用。在訂單詳情頁按「前往綠界付款」，以測試信用卡 `4311-9522-2222-2222`（3D 驗證碼 `1234`）付款，按「返回商店」後再按「查詢付款狀態」。完整流程見 [FEATURES.md](./FEATURES.md#ecpay-金流aio)。
+
 ### 開發模式
 
 伺服器與 CSS 監看要開兩個終端機。`dev:server` 不會自動重啟，修改後端程式後須手動重啟；修改 `.ejs` 與 `public/js` 只要重新整理頁面。
@@ -69,7 +71,7 @@ npm test
 curl "http://localhost:3001/api/products?limit=1"
 ```
 
-`npm test` 應顯示 6 個檔案、32 個測試全部通過。測試與開發共用 `database.sqlite`，會留下測試資料。
+`npm test` 應顯示 7 個檔案、51 個測試全部通過。測試與開發共用 `database.sqlite`，會留下測試資料。
 
 ### 重置資料庫
 

@@ -7,8 +7,8 @@
 | 框架 | Vitest 2.1.9 + Supertest 7.2.2 |
 | 類型 | API 整合測試：經過完整 Express middleware，寫入真實 SQLite |
 | 未涵蓋 | 頁面路由、前端腳本、獨立的單元測試 |
-| 規模 | 6 個測試檔、32 個測試 |
-| Mock | 無 |
+| 規模 | 7 個測試檔、51 個測試 |
+| Mock | 只有 `ecpay.test.js` 以 `vi.spyOn(global, 'fetch')` 模擬綠界回應；其他皆無。測試不會連線到綠界 |
 | 覆蓋率 | 未安裝 `@vitest/coverage-*`，目前無法產生覆蓋率報告 |
 
 ```bash
@@ -25,14 +25,14 @@ npx vitest run --reporter=verbose                     # 列出每個測試
 - 需要 `JWT_SECRET`，通常來自 `.env`。`npm test` 不會經過 `server.js` 的啟動檢查，缺少時不是立即報錯，而是大量測試失敗。
 - 種子管理員必須是 `admin@hexschool.com`／`12345678`（`tests/setup.js` 與 `tests/auth.test.js` 都寫死）。
 - 測試不需要先啟動伺服器，也不占用埠號；Supertest 直接使用 `app`。
-
+- `ECPAY_ENV` 不可為 `production`，`ecpay.test.js` 會檢查表單指向 `payment-stage.ecpay.com.tw`。
 ## 設定（`vitest.config.js`）
 
 | 設定 | 值 | 實際效果 |
 | --- | --- | --- |
 | `globals` | `true` | 不用匯入 `describe`、`it`、`expect`、`beforeAll` |
 | `fileParallelism` | `false` | 測試檔依序執行，避免同時寫入同一個資料庫 |
-| `sequence.files` | 6 個檔案的陣列 | **沒有作用**，見下節 |
+| `sequence.files` | 7 個檔案的陣列 | **沒有作用**，見下節 |
 | `hookTimeout` | `10000` | `beforeAll` 等 hook 上限 10 秒 |
 
 單一測試的逾時使用 Vitest 預設的 5 秒。測試檔只比對預設的 `*.test.js`，`tests/setup.js` 不會被當成測試執行。
@@ -47,12 +47,14 @@ npx vitest run --reporter=verbose                     # 列出每個測試
 | `orders.test.js` | 6 | 建立、空車、未登入、列表、詳情、不存在 | `registerUser` |
 | `adminProducts.test.js` | 6 | 列表、新增、修改、刪除、一般使用者 403、未登入 401 | `getAdminToken`、`registerUser` |
 | `adminOrders.test.js` | 4 | 列表、狀態篩選、詳情、一般使用者 403 | `getAdminToken`、`registerUser` |
+| `ecpay.test.js` | 19 | CheckMacValue 向量（5 筆，由 JSON 動態產生）與驗證、`MerchantTradeNo` 格式、付款表單的 401／404／200、`check-payment` 的 `PAYMENT_NOT_STARTED`／404／轉為 `paid`／冪等／未付款／金額不符／CMV 不符 | `registerUser` |
 
 ### 尚未涵蓋的情境
 
 新增或修改以下區域時，請一併補上測試：
 
 - `PATCH /api/orders/:id/pay`：完全沒有測試
+- 綠界：`queryAuth` 的無效 token、對非 `pending` 訂單開啟付款頁、連線失敗或 HTTP 錯誤造成的 502、`failed` 訂單查詢、實際連線綠界的流程
 - 下單後庫存實際扣減，以及 `STOCK_INSUFFICIENT`
 - 購物車累加與超過庫存
 - 會員模式的購物車查詢、修改、刪除，以及無效 token 不退回 session
@@ -65,7 +67,7 @@ npx vitest run --reporter=verbose                     # 列出每個測試
 
 ### 檔案之間
 
-`vitest.config.js` 的 `sequence.files` 看起來指定了 auth → products → cart → orders → adminProducts → adminOrders，但**實際並未照此順序**。實測順序為：
+`vitest.config.js` 的 `sequence.files` 看起來指定了 auth → products → cart → orders → adminProducts → adminOrders → ecpay，但**實際並未照此順序**。加入 `ecpay.test.js` 之前的實測順序為：
 
 ```text
 orders → cart → adminProducts → auth → adminOrders → products
@@ -90,6 +92,7 @@ orders → cart → adminProducts → auth → adminOrders → products
 | `orders.test.js` | `beforeAll` 註冊並加入購物車；建立訂單（設定 `orderId`，清空車）→ 空車失敗、列表、詳情 |
 | `adminProducts.test.js` | 新增（設定 `createdProductId`）→ 修改 → 刪除 |
 | `adminOrders.test.js` | `beforeAll` 完整建立一筆訂單 → 所有測試 |
+| `ecpay.test.js` | `check-payment` 區塊：巢狀 `beforeAll` 開啟付款頁（寫入 `merchant_trade_no`）→ 轉為 `paid` → 冪等；其餘情境各自建立使用者與訂單 |
 
 因此 `-t` 或 `it.only` 單獨執行鏈中的測試會失敗。實測 `npx vitest run tests/cart.test.js -t "should update cart item"` 會得到 `expected 404 to be 200`，要除錯時請執行整個檔案。
 
@@ -210,20 +213,20 @@ expect(res.body).toHaveProperty('error', 'VALIDATION_ERROR');
 
 ### 1. 測試會修改開發資料庫
 
-`src/database.js` 把路徑固定為 `database.sqlite`，測試**沒有隔離的資料庫**，也沒有清理或回滾。從全新資料庫執行一次 `npm test` 的實測結果：
+`src/database.js` 把路徑固定為 `database.sqlite`，測試**沒有隔離的資料庫**，也沒有清理或回滾。從全新資料庫執行一次 `npm test` 的結果（前 6 個檔案為實測，再加上依程式碼推算的 `ecpay.test.js`）：
 
 | 資料 | 變化 |
 | --- | --- |
-| `users` | 新增 6 筆 |
-| `orders` | 新增 2 筆 |
+| `users` | 新增 13 筆（`ecpay.test.js` 佔 7 筆） |
+| `orders` | 新增 7 筆（`ecpay.test.js` 佔 5 筆，其中 1 筆為 `paid`） |
 | `cart_items` | 留下 1 筆（`cart.test.js` 的會員新增未清理） |
-| `products[0]` 庫存 | 減少 2（`orders` 與 `adminOrders` 各下單 1 件） |
+| `products[0]` 庫存 | 減少 7（`orders`、`adminOrders` 各 1 件，`ecpay` 5 件） |
 
 開發時在瀏覽器看到的測試帳號與訂單就是這樣來的。需要乾淨資料時請重置資料庫。
 
 ### 2. 重複執行會耗盡庫存
 
-每次執行 `products[0]`（新資料庫上是庫存 30 的「粉色玫瑰花束」）減少 2，而 `cart.test.js` 需要把數量改為 3。依此推算，大約 14 次後庫存就不夠，出現與程式無關的失敗。實測把所有庫存設為 0 時，`cart`、`orders`、`adminOrders` 三個檔案會失敗（8 個測試失敗、4 個被跳過）。
+每次執行 `products[0]`（新資料庫上是庫存 30 的「粉色玫瑰花束」）減少 7，而 `cart.test.js` 需要把數量改為 3。依此推算，**大約 4 次後**庫存就不夠，出現與程式無關的失敗。加入 `ecpay.test.js` 之前，實測把所有庫存設為 0 時，`cart`、`orders`、`adminOrders` 三個檔案會失敗（8 個測試失敗、4 個被跳過）；現在 `ecpay.test.js` 同樣會受影響。
 
 遇到時先重置資料庫：
 
@@ -266,3 +269,11 @@ npm test
 ### 10. 非同步驗證要 `await`
 
 Supertest 的請求必須 `await`，否則測試可能在斷言執行前就結束並顯示通過。
+
+### 11. CheckMacValue 測試向量是複製來的
+
+`tests/fixtures/ecpay-checkmacvalue.json` 複製自 ecpay skill 的 `test-vectors/checkmacvalue.json`，讓全新 clone 不必安裝 skill 也能執行測試。兩者不會自動同步，skill 的向量更新時要手動重新複製。檔案共 8 筆向量，`ecpay.test.js` 只使用其中 5 筆 `method` 為 `SHA256` 且沒有 `formula` 的向量。
+
+### 12. 模擬綠界回應
+
+`queryTradeInfo` 使用全域 `fetch`，以 `vi.spyOn(global, 'fetch').mockResolvedValueOnce(...)` 模擬，並在測試結束時 `mockRestore()`。回應本體要用 `generateCheckMacValue` 算出正確的 `CheckMacValue`，否則會先在 CMV 驗證回 502，測不到後面的金額或狀態邏輯。`vi` 由 `globals: true` 提供，不需匯入。

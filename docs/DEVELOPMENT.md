@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | 後端路由檔 | camelCase + `Routes.js` | `cartRoutes.js`、`adminOrderRoutes.js` |
 | Middleware 檔 | camelCase + `Middleware.js`（錯誤處理例外） | `authMiddleware.js`、`errorHandler.js` |
+| 外部服務模組 | `src/services/` 下用服務名稱，小寫 | `src/services/ecpay.js` |
 | 前端頁面腳本 | kebab-case，與 `pageScript` 相同 | `public/js/pages/order-detail.js` |
 | 前端共用腳本 | 小寫，多字用 kebab-case | `auth.js`、`header-init.js` |
 | EJS 頁面與 partial | kebab-case | `product-detail.ejs`、`admin-sidebar.ejs` |
@@ -50,7 +51,7 @@
 
 better-sqlite3 是同步 API，這決定了後端的寫法：
 
-- 路由 handler 全部是同步函式。同步丟出的例外會被 Express 交給 `errorHandler`。
+- 路由 handler 除了呼叫綠界的 `POST /api/orders/:id/check-payment` 之外，全部是同步函式。同步丟出的例外會被 Express 交給 `errorHandler`。
 - 若新增 `async` handler，Express 4 **不會**捕捉 rejected promise，必須自行處理：
 
   ```js
@@ -253,11 +254,11 @@ Toast 類型：`Notification.show(message, 'success' | 'error' | 'warning' | 'in
 | `ADMIN_EMAIL` | 種子管理員 Email | 選填 | `admin@hexschool.com` | 只在此 Email 不存在時建立；改值會**新增**管理員，舊的仍存在。測試寫死預設值 |
 | `ADMIN_PASSWORD` | 種子管理員密碼 | 選填 | `12345678` | 只在建立時生效，帳號已存在後修改**無效**。測試寫死預設值 |
 | `NODE_ENV` | 只影響種子管理員的 bcrypt cost | 選填 | 未設定 | `test` 時 cost 為 1，否則 10。Vitest 會自動設為 `test`。註冊的 cost 固定為 10 |
-| `BASE_URL` | 預留 | 目前未使用 | 無 | 沒有程式讀取 |
-| `ECPAY_MERCHANT_ID` | 預留給 ECPay | 目前未使用 | 無 | 沒有程式讀取 |
-| `ECPAY_HASH_KEY` | 預留給 ECPay | 目前未使用 | 無 | 沒有程式讀取 |
-| `ECPAY_HASH_IV` | 預留給 ECPay | 目前未使用 | 無 | 沒有程式讀取 |
-| `ECPAY_ENV` | 預留給 ECPay | 目前未使用 | 無 | 沒有程式讀取 |
+| `BASE_URL` | 組成綠界的 `ReturnURL`、`ClientBackURL` | 選填 | `http://localhost:3001` | **不會跟著 `PORT` 改變**；換埠號時要一起改，否則「返回商店」會導到錯的位址 |
+| `ECPAY_MERCHANT_ID` | 綠界商店代號 | 付款時必要 | 無 | 範本為公開測試帳號 `3002607`。啟動時不檢查，缺少時簽出的參數無效 |
+| `ECPAY_HASH_KEY` | 計算 CheckMacValue | 付款時必要 | 無 | 同上。正式環境的值不得進版控 |
+| `ECPAY_HASH_IV` | 計算 CheckMacValue | 付款時必要 | 無 | 同上。正式環境的值不得進版控 |
+| `ECPAY_ENV` | 選擇綠界環境 | 選填 | 視為 `staging` | 只有 `production` 會連正式環境，其他值都是測試環境。模組載入時讀取，修改後要重啟。設為 `production` 時 `tests/ecpay.test.js` 會失敗 |
 
 新增環境變數時：更新 `.env.example` 與上表，敏感值不要提交到 git（`.gitignore` 已忽略 `.env` 與 `.env.*`，並保留 `.env.example`）。
 
@@ -267,7 +268,7 @@ Toast 類型：`Notification.show(message, 'success' | 'error' | 'warning' | 'in
 
 ### `@openapi` 區塊（路由必備）
 
-每個 API 路由正上方一個區塊，內容是 YAML，由 `swagger-jsdoc` 解析。專案目前 19 個操作都有。
+每個 API 路由正上方一個區塊，內容是 YAML，由 `swagger-jsdoc` 解析。專案目前 21 個區塊：20 個 API 操作，加上回傳 HTML 的 `/ecpay/payment/{orderId}`。
 
 ```js
 /**
@@ -315,7 +316,7 @@ router.patch('/:id/cancel', (req, res) => { /* ... */ });
 - 第一層路徑要寫**完整路徑**（含掛載前綴），參數用 `{id}`，不是 Express 的 `:id`。
 - 註解不會自動與實作同步，修改行為時要一起修改。
 - YAML 對縮排敏感；改完執行 `npm run openapi` 確認。
-- `tags` 使用既有名稱：`Auth`、`Products`、`Cart`、`Orders`、`Admin Products`、`Admin Orders`。
+- `tags` 使用既有名稱：`Auth`、`Products`、`Cart`、`Orders`、`Admin Products`、`Admin Orders`、`ECPay`。
 - `security` 使用 `swagger-config.js` 定義的名稱：`bearerAuth`、`sessionId`。兩者列為陣列的不同項目代表「擇一」，如 `cartRoutes.js`。
 - 公開 API 省略 `security`。
 - 只有 `src/routes/*.js` 會被掃描；放在 middleware 檔中的 `@openapi` 不會生效。

@@ -1,4 +1,3 @@
-const path = require('path');
 const { app, request, registerUser } = require('./setup');
 const {
   ecpayUrlEncode,
@@ -7,10 +6,8 @@ const {
   generateMerchantTradeNo,
 } = require('../src/services/ecpay');
 
-// 測試向量來自 .claude/skills/ecpay/test-vectors/checkmacvalue.json
-const vectors = require(
-  path.join(__dirname, '..', '.claude', 'skills', 'ecpay', 'test-vectors', 'checkmacvalue.json')
-);
+// 測試向量複製自 ecpay skill 的 test-vectors/checkmacvalue.json，納入版控以便全新 clone 也能執行
+const vectors = require('./fixtures/ecpay-checkmacvalue.json');
 
 // ── 1. CheckMacValue 測試向量 ────────────────────────────────────────
 describe('CheckMacValue 計算', () => {

@@ -15,7 +15,7 @@
 | 訪客車併入會員車 | ❌ | — | 登入後看不到訪客車 |
 | 建立訂單（扣庫存、清空車） | ✅ | ⚠️ | 未驗證庫存實際扣減與庫存不足 |
 | 訂單列表與詳情 | ✅ | ✅ | 列表無分頁 |
-| 模擬付款 | ✅ | ❌ | `PATCH /api/orders/:id/pay`，保留供開發測試 |
+| 模擬付款 | ✅ | ❌ | `PATCH /api/orders/:id/pay`，保留供開發測試；頁面已無按鈕 |
 | ECPay 金流 AIO | ✅ | ✅ | `GET /ecpay/payment/:orderId`（付款）、`POST /api/orders/:id/check-payment`（查詢） |
 | 運費 | ⚠️ | ❌ | 僅前端顯示，不計入訂單金額 |
 | 後台商品 CRUD | ✅ | ✅ | 未測試 409 與驗證錯誤 |
@@ -290,9 +290,11 @@ Body：`quantity` 必填，規則同上。這裡是**直接設定**數量，不�
 
 ### `GET /api/orders/:id`
 
-回傳 `orders` 所有欄位（含 `user_id`）加 `items`，`items` 是 `order_items` 所有欄位：`id`、`order_id`、`product_id`、`product_name`、`product_price`、`quantity`。不存在或非本人回 404 `訂單不存在`。商品被刪除後仍可正常查詢（實測）。
+回傳 `orders` 所有欄位（含 `user_id` 與綠界的 `merchant_trade_no`、`ecpay_trade_no`、`payment_type`、`paid_at`）加 `items`，`items` 是 `order_items` 所有欄位：`id`、`order_id`、`product_id`、`product_name`、`product_price`、`quantity`。不存在或非本人回 404 `訂單不存在`。商品被刪除後仍可正常查詢（實測）。
 
 ### `PATCH /api/orders/:id/pay`（模擬付款）
+
+保留供開發與測試使用，**前端已不再呼叫**，只能直接打 API。實際付款流程見 [ECPay 金流](#ecpay-金流aio)。
 
 Body：`action` 必填，`success` 或 `fail`。
 
@@ -311,7 +313,85 @@ Body：`action` 必填，`success` 或 `fail`。
 
 ### 前端行為
 
-`/orders/:id` 只在 `pending` 時顯示付款按鈕。`?payment=success|failed|cancel` 會顯示對應提示，但不影響實際狀態。狀態標籤：`pending` 待付款、`paid` 已付款、`failed` 付款失敗。
+`/orders/:id` 只在 `pending` 時顯示「前往綠界付款」與「查詢付款狀態」。`?payment=success|failed|cancel|pending` 會顯示對應提示，但不影響實際狀態。狀態標籤：`pending` 待付款、`paid` 已付款、`failed` 付款失敗。
+
+## ECPay 金流（AIO）
+
+### 行為描述
+
+使用綠界 AIO（全方位金流）付款頁，信用卡等付款資料都在綠界頁面輸入，本站不經手。本專案設計為在 localhost 執行，綠界無法連回，因此**沒有實作 Server Notify**：訂單狀態只會在使用者按「查詢付款狀態」時，由後端呼叫 `QueryTradeInfo` 驗證後更新。付完款但沒有查詢的訂單，會一直停在 `pending`。
+
+本節依程式碼與 `tests/ecpay.test.js` 描述；自動化測試以 mock 取代綠界回應，沒有連線到綠界。實際連線只做過手動驗證：2026-11-04 在測試環境以信用卡一次付清完成訂單 `ORD-20261104-1133E`（NT$ 580），綠界顯示付款成功，查詢後訂單轉為 `paid`。正式環境尚未驗證。
+
+完整流程：
+
+1. 結帳建立訂單（`pending`），庫存在此時已扣除。
+2. 訂單詳情頁按「前往綠界付款」，瀏覽器前往 `/ecpay/payment/:orderId?token=<JWT>`。
+3. 伺服器產生新的 `MerchantTradeNo` 並存入訂單，回傳自動送出的表單，瀏覽器 POST 至綠界。
+4. 使用者在綠界完成付款，按「返回商店」，導回 `/orders/:orderId?payment=pending`。
+5. 使用者按「查詢付款狀態」，前端呼叫 `POST /api/orders/:id/check-payment`。
+6. 後端驗證通過後把訂單改為 `paid`。
+
+測試環境可用信用卡 `4311-9522-2222-2222`，3D 驗證碼 `1234`。
+
+### `GET /ecpay/payment/:orderId`
+
+由瀏覽器直接前往，所以無法帶 `Authorization` header，改用查詢參數 `?token=<JWT>` 傳遞，由 `ecpayRoutes.js` 內的 `queryAuth` 驗證。這個路由回傳的是 HTML，**錯誤也是純文字，不是 `{ data, error, message }`**。
+
+成功時回傳 `views/pages/ecpay-redirect.ejs`，頁面載入後自動把表單 POST 至綠界。**每次呼叫都會產生新的 `MerchantTradeNo` 並覆寫訂單上的舊值**。
+
+| 狀態 | 回應文字 | 情境 |
+| --- | --- | --- |
+| 401 | `未授權，請重新登入` | 沒有 `token` |
+| 401 | `Token 無效或已過期，請重新登入` | 驗證失敗或過期 |
+| 401 | `使用者不存在` | token 有效但使用者已不存在 |
+| 404 | `訂單不存在` | 訂單不存在或非本人 |
+| 400 | `訂單狀態不是 pending，無法付款` | 訂單已是 `paid` 或 `failed` |
+
+送交綠界的主要參數（`src/services/ecpay.js` 的 `buildAioParams`）：
+
+| 參數 | 值 | 說明 |
+| --- | --- | --- |
+| `MerchantTradeNo` | 16 碼大寫英數 | 訂單 UUID 去掉連字號後的前 8 碼 + 毫秒時間戳十六進位的末 8 碼。訂單編號 `ORD-...` 含 `-`，不能直接使用 |
+| `MerchantTradeDate` | `yyyy/MM/dd HH:mm:ss` | 固定為 UTC+8，與伺服器時區無關 |
+| `TotalAmount` | `orders.total_amount` | **不含前端顯示的運費**，見下方已知限制 |
+| `ItemName` | `名稱 x數量`，以 `#` 連接 | 名稱中的控制字元與 `#` 會被移除；超過 400 字時截斷為 397 字加 `...` |
+| `ChoosePayment` | `ALL` | 由使用者在綠界頁面選擇付款方式 |
+| `ReturnURL` | `${BASE_URL}/api/ecpay/notify` | 綠界規定必填；**本專案沒有這個路由**，若真的收到請求會得到 404 |
+| `ClientBackURL` | `${BASE_URL}/orders/:id?payment=pending` | 「返回商店」的目的地 |
+| `CheckMacValue` | SHA256 大寫 | `EncryptType=1`；以 `ECPAY_HASH_KEY`、`ECPAY_HASH_IV` 計算 |
+
+### `POST /api/orders/:id/check-payment`
+
+需 JWT，不需要 body。依下表**由上而下**判斷，所以訂單若從未發起綠界付款，即使已用模擬付款標成 `paid`，也會得到 `PAYMENT_NOT_STARTED`。
+
+| 情境 | 狀態 | 錯誤碼 | `data` | 訊息 |
+| --- | --- | --- | --- | --- |
+| 訂單不存在或非本人 | 404 | `NOT_FOUND` | `null` | `訂單不存在` |
+| `merchant_trade_no` 為空 | 400 | `PAYMENT_NOT_STARTED` | `null` | `尚未發起綠界付款` |
+| 訂單已是 `paid` | 200 | — | `{ status: 'paid' }` | `訂單已付款`（不呼叫綠界） |
+| 訂單已是 `failed` | 200 | — | `{ status: 'failed' }` | `訂單狀態異常`（不呼叫綠界） |
+| 連線失敗或綠界回非 2xx | 502 | `ECPAY_QUERY_FAILED` | `null` | `綠界查詢失敗：<原因>` |
+| 回傳的 CheckMacValue 不符 | 502 | `ECPAY_QUERY_FAILED` | `null` | `回傳 CheckMacValue 驗證失敗` |
+| `TradeAmt` 不等於 `total_amount` | 502 | `ECPAY_QUERY_FAILED` | `null` | `交易金額不符` |
+| `TradeStatus` 不是 `'1'` | 200 | — | `{ status: 'pending', trade_status }` | `尚未完成付款` |
+| `TradeStatus` 是 `'1'` | 200 | — | `{ status: 'paid' }` | `付款成功` |
+
+注意事項：
+
+- 非 `pending` 訂單回 200 而不是 `INVALID_STATUS`，因此重複查詢是安全的，呼叫端要讀 `data.status` 判斷結果。
+- 金額比對排在 `TradeStatus` 之前，即使交易尚未付款，金額不符也會回 502。
+- 信用卡付款後銀行尚未回覆時，`TradeStatus` 可能暫時是 `0`，稍後再查即可。
+- 更新在 `db.transaction()` 內以 `UPDATE ... WHERE status='pending'` 執行，並寫入 `ecpay_trade_no`（`TradeNo`）、`payment_type`（`PaymentType`）、`paid_at`（`PaymentDate`）。
+- 這是專案唯一的 `async` handler，例外由 handler 自行 `next(err)`。
+
+### 前端行為
+
+「前往綠界付款」是帶 token 的連結。「查詢付款狀態」查詢中會停用；結果為 `paid` 時更新畫面並顯示成功訊息，其他 200 回應以 toast 顯示 API 的 `message`。**任何非 2xx 錯誤都只顯示固定文字** `查詢失敗，請稍後再試`，看不到 `PAYMENT_NOT_STARTED` 等具體原因。頁面不會在返回時自動查詢。
+
+### 環境切換
+
+`ECPAY_ENV=production` 使用 `payment.ecpay.com.tw`，其他值或未設定都使用 `payment-stage.ecpay.com.tw`。此值在載入 `src/services/ecpay.js` 時讀取，修改後要重啟伺服器。其他變數見 [DEVELOPMENT.md](./DEVELOPMENT.md#環境變數)。
 
 ## 後台商品管理
 
@@ -397,9 +477,11 @@ Body：`action` 必填，`success` 或 `fail`。
 
 | 問題 | 影響 |
 | --- | --- |
-| `PATCH /api/orders/:id/pay` 可由訂單擁有者直接標記為已付款 | 模擬用途可接受；上線前必須替換 |
-| 運費只在前端顯示 | 小計未滿 500 時，結帳頁金額與訂單金額不同 |
-| 付款失敗不回補庫存、也不能重試，但頁面文字寫「付款失敗，請重試」 | 庫存永久減少；文字與行為不符 |
+| `PATCH /api/orders/:id/pay` 可由訂單擁有者直接標記為已付款 | 可完全繞過綠界；模擬用途可接受，上線前必須移除或限制 |
+| 運費只在前端顯示 | 小計未滿 500 時，結帳頁金額與訂單金額不同，**實際向綠界請款的是不含運費的 `total_amount`** |
+| 付款失敗不回補庫存、也不能重試，但 `?payment=failed` 的文字寫「付款失敗，請重試」 | 庫存永久減少；文字與行為不符。目前只有直接呼叫模擬付款 API 才會產生 `failed` |
+| 重新進入 `/ecpay/payment/:orderId` 會覆寫 `merchant_trade_no` | 付款完成後若再次進入（例如按上一頁），之後只會查詢新編號，已付款的舊交易查不到，訂單停在 `pending` |
+| 沒有實作 `ReturnURL` 的 Server Notify | 使用者付款後沒按查詢，訂單就不會更新；部署到公開網址前應補上 |
 | 訪客車不會併入會員車 | 訪客登入結帳時購物車看似消失 |
 | 後台無法變更訂單狀態，也無取消功能 | `pending` 訂單會持續占用庫存並阻擋商品刪除 |
 
@@ -426,6 +508,7 @@ Body：`action` 必填，`success` 或 `fail`。
 | 商品加入購物車後徽章固定 +1 | 重複加入同商品時與 `items.length` 不一致，重新整理後才修正 |
 | `created_at` 是無時區的 UTC 字串，`new Date()` 會當成本地時間 | 台灣時間 00:00–08:00 下單的日期會顯示為前一天 |
 | 訂單編號日期是 UTC | 同上，編號日期可能比本地日期早一天 |
+| `check-payment` 的錯誤訊息固定為 `查詢失敗，請稍後再試` | 使用者無法區分尚未發起付款、綠界連線失敗或金額不符 |
 
 ### 安全性
 
@@ -436,12 +519,13 @@ Body：`action` 必填，`success` 或 `fail`。
 | 無速率限制或登入鎖定 | 全域 | 帳密可被暴力嘗試 |
 | JWT 存於 localStorage 且無法撤銷 | `auth.js` | XSS 可竊取 token；外洩後最多有效 7 天 |
 | Token 中的 `role` 不與資料庫同步 | `authMiddleware.js` | 降級後舊 token 仍有管理員權限，直到到期 |
+| JWT 放在網址查詢參數 | `order-detail.js`、`ecpayRoutes.js` | 7 天有效的 token 會留在瀏覽器歷史與伺服器存取紀錄 |
 
 ### 維護性
 
 | 問題 | 位置 |
 | --- | --- |
-| JWT 驗證邏輯重複 | `authMiddleware.js`、`cartRoutes.js` 的 `dualAuth` |
+| JWT 驗證邏輯重複 | `authMiddleware.js`、`cartRoutes.js` 的 `dualAuth`、`ecpayRoutes.js` 的 `queryAuth` |
 | 分頁解析重複 | `productRoutes.js`、`adminProductRoutes.js`、`adminOrderRoutes.js` |
 | JWT 簽發重複 | `authRoutes.js` 兩處 |
 | `statusMap` 重複且配色不同 | `orders.js`、`order-detail.js`、`admin-orders.js` |

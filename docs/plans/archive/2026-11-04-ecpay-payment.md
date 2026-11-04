@@ -54,12 +54,17 @@ TradeStatus 為 `0`（未付款）→ 200，訂單仍 pending，message 說明�
 - 共用 `database.sqlite`：以遷移處理新欄位，不需刪庫。
 
 ## Tasks
-- [ ] `src/database.js`：冪等遷移新增 4 個 orders 欄位
-- [ ] 新增 `src/services/ecpay.js`（CMV、MerchantTradeNo、buildAioParams、queryTradeInfo）
-- [ ] 新增 `src/routes/ecpayRoutes.js`（`GET /ecpay/payment/:orderId` 回傳 HTML、`POST /api/orders/:id/check-payment` 查詢，含 `@openapi` 註解）並於 `app.js` 掛載
-- [ ] 前端：訂單詳情頁改為綠界付款／查詢流程；新增 `views/pages/ecpay-redirect.ejs` 自動送出表單頁
-- [ ] 更新 `.env.example` 之 ECPAY 註解
-- [ ] 撰寫 `tests/ecpay.test.js` 並加入 `vitest.config.js` 的 `sequence.files`：CMV 以 `test-vectors/checkmacvalue.json` 驗證；`GET /ecpay/payment/:orderId` 回傳含 `<form action="…">` 的 HTML、MerchantTradeNo ≤20 且英數、他人訂單 404；`POST /api/orders/:id/check-payment` 以 `vi.spyOn(global,'fetch')` 模擬 TradeStatus 1／0、金額不符、CMV 錯，驗證狀態轉移與冪等
-- [ ] 更新 `docs/FEATURES.md`（端點、錯誤碼）、`CHANGELOG.md`（移除「尚未包含：ECPay」）、`ARCHITECTURE.md`、`TESTING.md`、`CLAUDE.md` 第 18 行
-- [ ] 驗證：`npm test` 全綠；`npm start` 後以測試卡實際走完付款並確認訂單轉為已付款
-- [ ] 完成後 `git mv docs/plans/2026-11-04-ecpay-payment.md docs/plans/archive/`
+- [x] `src/database.js`：冪等遷移新增 4 個 orders 欄位
+- [x] 新增 `src/services/ecpay.js`（CMV、MerchantTradeNo、buildAioParams、queryTradeInfo）
+- [x] 新增 `src/routes/ecpayRoutes.js`（`GET /ecpay/payment/:orderId` 回傳 HTML、`POST /api/orders/:id/check-payment` 查詢，含 `@openapi` 註解）並於 `app.js` 掛載
+- [x] 前端：訂單詳情頁改為綠界付款／查詢流程；新增 `views/pages/ecpay-redirect.ejs` 自動送出表單頁
+- [x] 更新 `.env.example` 之 ECPAY 註解
+- [x] 撰寫 `tests/ecpay.test.js` 並加入 `vitest.config.js` 的 `sequence.files`：CMV 以 `test-vectors/checkmacvalue.json` 驗證；`GET /ecpay/payment/:orderId` 回傳含 `<form action="…">` 的 HTML、MerchantTradeNo ≤20 且英數、他人訂單 404；`POST /api/orders/:id/check-payment` 以 `vi.spyOn(global,'fetch')` 模擬 TradeStatus 1／0、金額不符、CMV 錯，驗證狀態轉移與冪等
+- [x] 更新 `docs/FEATURES.md`（端點、錯誤碼）、`CHANGELOG.md`（移除「尚未包含：ECPay」）、`ARCHITECTURE.md`、`TESTING.md`、`CLAUDE.md` 第 18 行
+- [ ] 驗證：`npm test` 全綠（歸檔時尚無紀錄可確認）
+- [x] 驗證：`npm start` 後以測試卡實際走完付款並確認訂單轉為已付款（2026-11-04 手動完成：`ORD-20261104-1133E`，`MerchantTradeNo` `DE02F825A4B7CDFB`，NT$ 580，綠界顯示付款成功，資料庫 `status=paid`）
+- [x] 完成後 `git mv docs/plans/2026-11-04-ecpay-payment.md docs/plans/archive/`
+
+## 實作與 Spec 的差異
+- `GET /ecpay/payment/:orderId` 的 JWT 由查詢參數 `?token=` 傳遞（`queryAuth`），不是 `Authorization` header；錯誤回純文字。
+- `POST /api/orders/:id/check-payment` 對非 `pending` 訂單回 200 與 `data.status`，**沒有**使用 Spec 列出的 `INVALID_STATUS`。
