@@ -22,7 +22,7 @@ npm run openapi      # 由 src/routes/*.js 的 @openapi 註解產生 openapi.jso
 - 功能開發使用 docs/plans/ 記錄計畫；完成後移至 docs/plans/archive/
 
 ## 詳細文件
-- ./docs/README.md — 項目介紹與快速開始
+- ./docs/README.md — 項目介紹與快速開始（docs/ 為精簡版；完整細節在 ./docs/reference/）
 - ./docs/ARCHITECTURE.md — 架構、目錄結構、資料流
 - ./docs/DEVELOPMENT.md — 開發規範、命名規則
 - ./docs/FEATURES.md — 功能列表與完成狀態
