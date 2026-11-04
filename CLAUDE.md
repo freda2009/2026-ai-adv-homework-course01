@@ -18,7 +18,7 @@ npm run openapi      # 由 src/routes/*.js 的 @openapi 註解產生 openapi.jso
 - 資料庫路徑固定為專案根目錄的 `database.sqlite`，**測試與開發共用同一個檔案**：`npm test` 每次都會新增資料並消耗 `products[0]` 的庫存。可接受重置時，停止伺服器後刪除 `database.sqlite*`。
 - better-sqlite3 是同步 API，路由 handler 目前全為同步函式；多表寫入必須包在 `db.transaction()`。若新增 async handler，須自行 `next(err)`（Express 4 不會捕捉 rejected promise）。
 - 購物車是雙模式認證（JWT 優先，其次 `X-Session-Id`），訂單只接受 JWT，且訪客車與會員車**不會合併**。修改認證時注意 `cartRoutes.js` 內有獨立的 `dualAuth`，與 `authMiddleware` 是兩份邏輯。
-- ECPay 尚未實作：`ECPAY_*` 與 `BASE_URL` 環境變數沒有任何程式讀取，付款是 `PATCH /api/orders/:id/pay` 模擬。運費 150／滿 500 免運只存在前端顯示，不計入 `total_amount`。
+- ECPay AIO 已實作：`GET /ecpay/payment/:orderId`（瀏覽器導向，query `?token=JWT`）產生自動送出表單；`POST /api/orders/:id/check-payment`（JWT）呼叫 QueryTradeInfo 驗證付款。`src/services/ecpay.js` 負責 CheckMacValue 計算與 QueryTradeInfo。`PATCH /api/orders/:id/pay` 模擬付款保留不動。運費 150／滿 500 免運只存在前端顯示，不計入 `total_amount`。
 - 功能開發使用 docs/plans/ 記錄計畫；完成後移至 docs/plans/archive/
 
 ## 詳細文件
