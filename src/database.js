@@ -81,9 +81,33 @@ function initializeDatabase() {
     }
   }
 
+  // 每次發起綠界付款的編號都保留，避免重入付款頁後查不到已付款的舊交易
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ecpay_trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      merchant_trade_no TEXT UNIQUE NOT NULL,
+      order_id TEXT NOT NULL,
+      trade_status TEXT,
+      checked_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (order_id) REFERENCES orders(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ecpay_trades_order_id ON ecpay_trades(order_id);
+  `);
+  backfillEcpayTrades();
+
   // Seed data
   seedAdminUser();
   seedProducts();
+}
+
+// Idempotent migration: 將 orders 上既有的編號補進 ecpay_trades
+function backfillEcpayTrades() {
+  db.prepare(
+    `INSERT OR IGNORE INTO ecpay_trades (merchant_trade_no, order_id, created_at)
+     SELECT merchant_trade_no, id, created_at FROM orders WHERE merchant_trade_no IS NOT NULL`
+  ).run();
 }
 
 function seedAdminUser() {
@@ -177,5 +201,8 @@ function seedProducts() {
 }
 
 initializeDatabase();
+
+// 供測試驗證遷移可重複執行
+db.backfillEcpayTrades = backfillEcpayTrades;
 
 module.exports = db;

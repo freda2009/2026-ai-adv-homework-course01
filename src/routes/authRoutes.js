@@ -4,8 +4,20 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../database');
 const authMiddleware = require('../middleware/authMiddleware');
+const cartService = require('../services/cart');
 
 const router = express.Router();
+
+// 合併失敗不阻擋登入：transaction 已回滾，訪客車保留，下次登入可再合併
+function mergeGuestCartSafely(req, userId) {
+  if (!req.sessionId) return { merged: 0, adjusted: 0 };
+  try {
+    return cartService.mergeGuestCart(req.sessionId, userId);
+  } catch (err) {
+    console.error('[Cart] 訪客購物車合併失敗：', err);
+    return { merged: 0, adjusted: 0 };
+  }
+}
 
 /**
  * @openapi
@@ -13,6 +25,13 @@ const router = express.Router();
  *   post:
  *     summary: 註冊新帳號
  *     tags: [Auth]
+ *     parameters:
+ *       - in: header
+ *         name: X-Session-Id
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: 訪客購物車識別碼；成功後將該購物車併入會員購物車
  *     requestBody:
  *       required: true
  *       content:
@@ -53,6 +72,14 @@ const router = express.Router();
  *                           type: string
  *                     token:
  *                       type: string
+ *                     cart_merge:
+ *                       type: object
+ *                       description: 訪客購物車合併結果；未帶 X-Session-Id 或合併失敗時皆為 0
+ *                       properties:
+ *                         merged:
+ *                           type: integer
+ *                         adjusted:
+ *                           type: integer
  *                 error:
  *                   type: string
  *                   nullable: true
@@ -118,7 +145,8 @@ router.post('/register', (req, res) => {
   res.status(201).json({
     data: {
       user: { id: user.id, email: user.email, name: user.name, role: user.role },
-      token
+      token,
+      cart_merge: mergeGuestCartSafely(req, user.id)
     },
     error: null,
     message: '註冊成功'
@@ -131,6 +159,13 @@ router.post('/register', (req, res) => {
  *   post:
  *     summary: 登入
  *     tags: [Auth]
+ *     parameters:
+ *       - in: header
+ *         name: X-Session-Id
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: 訪客購物車識別碼；成功後將該購物車併入會員購物車
  *     requestBody:
  *       required: true
  *       content:
@@ -168,6 +203,14 @@ router.post('/register', (req, res) => {
  *                           type: string
  *                     token:
  *                       type: string
+ *                     cart_merge:
+ *                       type: object
+ *                       description: 訪客購物車合併結果；未帶 X-Session-Id 或合併失敗時皆為 0
+ *                       properties:
+ *                         merged:
+ *                           type: integer
+ *                         adjusted:
+ *                           type: integer
  *                 error:
  *                   type: string
  *                   nullable: true
@@ -216,7 +259,8 @@ router.post('/login', (req, res) => {
   res.json({
     data: {
       user: { id: user.id, email: user.email, name: user.name, role: user.role },
-      token
+      token,
+      cart_merge: mergeGuestCartSafely(req, user.id)
     },
     error: null,
     message: '登入成功'

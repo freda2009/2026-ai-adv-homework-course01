@@ -1,25 +1,13 @@
 # [ 此專案是AI開發進化營的作業]花漾生活 Flower Life
 
-花卉電商示範專案。單一 Express 應用同時提供 REST API 與伺服器渲染頁面，資料存放於本機 SQLite 檔案，不需要額外的資料庫服務。
+花卉電商示範專案：Express 提供 REST API 與 EJS 頁面，資料存於 SQLite。付款採綠界 ECPay AIO；localhost 收不到通知，須手動查詢付款狀態。
 
+**技術棧**：Node 20+、Express 4、better-sqlite3、JWT、EJS、Vue 3、Tailwind 4、Vitest。
 - **前台**：商品瀏覽、訪客／會員購物車、結帳、訂單查詢、綠界 ECPay 付款
 - **後台**：商品 CRUD、訂單查詢與狀態篩選
 - **API**：20 個 REST 操作（15 個路徑），另有 1 個產生綠界付款表單的瀏覽器導向路由，可由註解產生 OpenAPI 3.0.3 規格
 
 > 付款使用**綠界 ECPay AIO**。本專案設計為在 localhost 執行，收不到綠界的 Server Notify，因此付款結果由使用者按「查詢付款狀態」後，後端主動呼叫 `QueryTradeInfo` 驗證。舊的模擬付款 API `PATCH /api/orders/:id/pay` 仍保留，但頁面已不再提供按鈕。詳見 [ARCHITECTURE.md](./ARCHITECTURE.md#金流與第三方整合)。
-----------測試用帳號&密碼-----
-ADMIN_EMAIL=admin@hexschool.com
-ADMIN_PASSWORD=12345678
-
-新註冊帳號=test2@test.com
-新註冊帳號PASSWORD=qwerty
-
-### 綠界信用卡測試卡資訊
- - 信用卡：4311-9522-2222-2222
- - 有效年月：任意未來日期 (12/2030)
- - 安全碼：  222 
- - 3D 驗證：1234
- - 
 
 ## 技術棧
 
@@ -45,76 +33,13 @@ ADMIN_PASSWORD=12345678
 
 ```bash
 npm install
-cp .env.example .env
-# 產生隨機 JWT_SECRET（macOS 請改用 sed -i ''）
-sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$(openssl rand -hex 32)/" .env
-npm start
-```
-
-開啟 <http://localhost:3001>。首次啟動會自動建立 `database.sqlite`、所有資料表、管理員帳號與 8 筆種子商品。
-
-**預設管理員**（來自 `.env` 的 `ADMIN_EMAIL`／`ADMIN_PASSWORD`，僅供本機開發）：
-
-| 欄位 | 值 |
-| --- | --- |
-| Email | `admin@hexschool.com` |
-| 密碼 | `12345678` |
-| 後台入口 | <http://localhost:3001/admin/products> |
-
-> 測試程式把這組帳密寫死。修改後 `npm test` 會失敗，詳見 [TESTING.md](./TESTING.md#常見陷阱)。
-
-**測試付款**：`.env.example` 已附綠界公開測試帳號，複製後即可使用。在訂單詳情頁按「前往綠界付款」，以測試信用卡 `4311-9522-2222-2222`（3D 驗證碼 `1234`）付款，按「返回商店」後再按「查詢付款狀態」。完整流程見 [FEATURES.md](./FEATURES.md#ecpay-金流aio)。
-
-### 開發模式
-
-伺服器與 CSS 監看要開兩個終端機。`dev:server` 不會自動重啟，修改後端程式後須手動重啟；修改 `.ejs` 與 `public/js` 只要重新整理頁面。
-
-```bash
-# 終端機 1
-npm run dev:css
-
-# 終端機 2
-npm run dev:server
-```
-
-### 驗證安裝
-
-```bash
+cp .env.example .env   # 設定 JWT_SECRET
+npm start              # localhost:3001
 npm test
-curl "http://localhost:3001/api/products?limit=1"
 ```
 
-`npm test` 應顯示 7 個檔案、51 個測試全部通過。測試與開發共用 `database.sqlite`，會留下測試資料。
+管理員：`admin@hexschool.com`／`12345678`。測試與開發共用 `database.sqlite`，重置請刪除之。
 
-### 重置資料庫
+## 文件
 
-先停止伺服器，再刪除三個檔案。下次啟動會重新建表並寫入種子資料。**這會刪除所有本機資料。**
-
-```bash
-rm -f database.sqlite database.sqlite-wal database.sqlite-shm
-```
-
-## 常用指令
-
-| 指令 | 實際執行內容 | 何時使用 |
-| --- | --- | --- |
-| `npm start` | `css:build` + `node server.js` | 一次完成建置並啟動 |
-| `npm run dev:server` | `node server.js` | 開發時啟動伺服器（不建置 CSS） |
-| `npm run dev:css` | Tailwind CLI `--watch` | 開發時持續重建 CSS |
-| `npm run css:build` | Tailwind CLI `--minify` | 產生壓縮後的 `public/css/output.css` |
-| `npm test` | `vitest run` | 執行全部測試 |
-| `npm run openapi` | `node generate-openapi.js` | 在專案根目錄產生 `openapi.json` |
-
-單檔測試：`npx vitest run tests/cart.test.js`。變更埠號：`PORT=4000 npm run dev:server`。
-
-## 文件索引
-
-| 文件 | 內容 | 何時閱讀 |
-| --- | --- | --- |
-| [README.md](./README.md) | 專案介紹、技術棧、快速開始 | 第一次接觸專案 |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | 目錄結構、啟動流程、路由總覽、回應格式、認證、資料庫 schema、資料流、金流 | 需要理解模組如何配合時 |
-| [DEVELOPMENT.md](./DEVELOPMENT.md) | 命名規則、模組系統、新增 API／middleware／DB 步驟、環境變數、JSDoc、計畫歸檔 | 開始寫程式前 |
-| [FEATURES.md](./FEATURES.md) | 功能完成狀態、各端點參數與業務邏輯、錯誤碼、已知問題 | 串接 API 或修改業務邏輯時 |
-| [TESTING.md](./TESTING.md) | 測試檔案、依賴關係、輔助函式、撰寫步驟、常見陷阱 | 撰寫或除錯測試時 |
-| [CHANGELOG.md](./CHANGELOG.md) | 版本更新紀錄 | 了解變更歷史 |
-| [plans/](./plans/) | 進行中的開發計畫，完成後移至 [plans/archive/](./plans/archive/) | 開發新功能時 |
+[詳細版](./reference/README.md)・[架構](./ARCHITECTURE.md)・[開發](./DEVELOPMENT.md)・[功能](./FEATURES.md)・[測試](./TESTING.md)・[日誌](./CHANGELOG.md)・[計畫](./plans/)

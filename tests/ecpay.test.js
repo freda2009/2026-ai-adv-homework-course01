@@ -327,3 +327,454 @@ describe('POST /api/orders/:id/check-payment', () => {
     fetchSpy.mockRestore();
   });
 });
+
+// ── 5. 重入付款頁與多筆交易 ──────────────────────────────────────────
+describe('重入付款頁與多筆交易對帳', () => {
+  const db = require('../src/database');
+  const { v4: uuidv4 } = require('uuid');
+  const { generateCheckMacValue: cmv } = require('../src/services/ecpay');
+  const AMOUNT = 1000;
+
+  let fetchSpy;
+  let ecpay; // 模擬綠界端：merchantTradeNo → 回應設定
+  let queried; // 實際送往 QueryTradeInfo 的編號
+
+  // 不存在的編號依 2026-11-04 測試環境實測格式回應：HTTP 200、TradeAmt=0、CMV 有效
+  function buildResponse(no) {
+    const t = ecpay[no];
+    const status = t ? t.status : '10200047';
+    const paid = status === '1';
+    const body = {
+      HandlingCharge: '0',
+      ItemName: '',
+      MerchantID: process.env.ECPAY_MERCHANT_ID,
+      MerchantTradeNo: t && t.wrongNo ? 'SOMEOTHERTRADENO' : no,
+      PaymentDate: paid ? (t.date || '2026/11/04 12:00:00') : '',
+      PaymentType: paid ? 'Credit_CreditCard' : '',
+      PaymentTypeChargeFee: '0',
+      TradeAmt: String(t ? (t.amt ?? AMOUNT) : 0),
+      TradeDate: '',
+      TradeNo: paid ? `TN${no}`.slice(0, 20) : '',
+      TradeStatus: status,
+    };
+    body.CheckMacValue = t && t.badCmv
+      ? 'BAD'
+      : cmv(body, process.env.ECPAY_HASH_KEY, process.env.ECPAY_HASH_IV);
+    return new URLSearchParams(body).toString();
+  }
+
+  beforeEach(() => {
+    ecpay = {};
+    queried = [];
+    fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url, opt) => {
+      const no = new URLSearchParams(opt.body).get('MerchantTradeNo');
+      queried.push(no);
+      const t = ecpay[no];
+      if (t && t.networkError) throw new Error('connect ECONNREFUSED');
+      if (t && t.http) return { ok: false, status: t.http, text: async () => '' };
+      return { ok: true, status: 200, text: async () => buildResponse(no) };
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // 直接以 SQL 建立訂單，避免消耗 products[0] 庫存（見 docs/TESTING.md）
+  async function createOrder(status = 'pending') {
+    const { token, user } = await registerUser();
+    const id = uuidv4();
+    db.prepare(
+      `INSERT INTO orders (id, order_no, user_id, recipient_name, recipient_email, recipient_address, total_amount, status)
+       VALUES (?, ?, ?, 'T', 't@t.com', 'A', ?, ?)`
+    ).run(id, `ORD-TEST-${id.slice(0, 13)}`, user.id, AMOUNT, status);
+    db.prepare(
+      `INSERT INTO order_items (id, order_id, product_id, product_name, product_price, quantity)
+       VALUES (?, ?, 'test-product', '測試商品', ?, 1)`
+    ).run(uuidv4(), id, AMOUNT);
+    return { id, token };
+  }
+
+  const enter = (o) => request(app).get(`/ecpay/payment/${o.id}?token=${o.token}`);
+
+  // 進入付款頁並回傳新編號；測試會斷言前一步成功
+  async function startTrade(o) {
+    const res = await enter(o);
+    expect(res.status).toBe(200);
+    return res.text.match(/name="MerchantTradeNo" value="([^"]+)"/)[1];
+  }
+
+  const check = (o) => request(app)
+    .post(`/api/orders/${o.id}/check-payment`)
+    .set('Authorization', `Bearer ${o.token}`);
+
+  const orderRow = (o) => db.prepare('SELECT * FROM orders WHERE id = ?').get(o.id);
+  const tradeRows = (o) => db.prepare('SELECT * FROM ecpay_trades WHERE order_id = ? ORDER BY id').all(o.id);
+
+  function insertTrades(o, count) {
+    const nos = [];
+    for (let i = 0; i < count; i++) {
+      const no = `SEED${o.id.replace(/-/g, '').slice(0, 12)}${String(i).padStart(4, '0')}`.toUpperCase();
+      db.prepare('INSERT INTO ecpay_trades (merchant_trade_no, order_id) VALUES (?, ?)').run(no, o.id);
+      nos.push(no);
+    }
+    db.prepare('UPDATE orders SET merchant_trade_no = ? WHERE id = ?').run(nos[nos.length - 1], o.id);
+    return nos;
+  }
+
+  describe('重入付款頁', () => {
+    it('首次進入不呼叫綠界，新增 1 筆紀錄', async () => {
+      const o = await createOrder();
+      const no = await startTrade(o);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(tradeRows(o).map(t => t.merchant_trade_no)).toEqual([no]);
+      expect(orderRow(o).merchant_trade_no).toBe(no);
+    });
+
+    it('舊單未付後重入：產生新編號並保留歷史', async () => {
+      const o = await createOrder();
+      const t1 = await startTrade(o);
+      ecpay[t1] = { status: '0' };
+      const t2 = await startTrade(o);
+      expect(t2).not.toBe(t1);
+      expect(tradeRows(o).map(t => t.merchant_trade_no)).toEqual([t1, t2]);
+      expect(orderRow(o).merchant_trade_no).toBe(t2);
+    });
+
+    it('舊單已付但本地仍 pending 時重入：轉 paid 並導回訂單頁，不產生新編號', async () => {
+      const o = await createOrder();
+      const t1 = await startTrade(o);
+      ecpay[t1] = { status: '1' };
+
+      const res = await enter(o);
+
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe(`/orders/${o.id}`);
+      expect(orderRow(o).status).toBe('paid');
+      expect(orderRow(o).merchant_trade_no).toBe(t1);
+      expect(tradeRows(o)).toHaveLength(1);
+    });
+
+    it('已 paid 重入：導回訂單頁，不呼叫綠界也不產生新編號', async () => {
+      const o = await createOrder();
+      const t1 = await startTrade(o);
+      ecpay[t1] = { status: '1' };
+      await check(o);
+      fetchSpy.mockClear();
+
+      const res = await enter(o);
+
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe(`/orders/${o.id}`);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(tradeRows(o)).toHaveLength(1);
+      expect(orderRow(o).merchant_trade_no).toBe(t1);
+    });
+
+    it('failed 重入：回 400，不產生新編號', async () => {
+      const o = await createOrder('failed');
+      const res = await enter(o);
+      expect(res.status).toBe(400);
+      expect(tradeRows(o)).toHaveLength(0);
+    });
+
+    it('對帳連線失敗：回 502 且不放行新付款', async () => {
+      const o = await createOrder();
+      const t1 = await startTrade(o);
+      ecpay[t1] = { networkError: true };
+
+      const res = await enter(o);
+
+      expect(res.status).toBe(502);
+      expect(tradeRows(o)).toHaveLength(1);
+      expect(orderRow(o).status).toBe('pending');
+    });
+
+    it('已達 10 筆且皆未付：回 400，不產生新編號', async () => {
+      const o = await createOrder();
+      const nos = insertTrades(o, 10);
+      nos.forEach(no => { ecpay[no] = { status: '0' }; });
+
+      const res = await enter(o);
+
+      expect(res.status).toBe(400);
+      expect(tradeRows(o)).toHaveLength(10);
+      expect(queried).toEqual(nos);
+    });
+
+    it('已達 10 筆但其中一筆已付：仍轉 paid', async () => {
+      const o = await createOrder();
+      const nos = insertTrades(o, 10);
+      nos.forEach(no => { ecpay[no] = { status: '0' }; });
+      ecpay[nos[4]] = { status: '1' };
+
+      const res = await enter(o);
+
+      expect(res.status).toBe(302);
+      expect(orderRow(o).status).toBe('paid');
+      expect(orderRow(o).merchant_trade_no).toBe(nos[4]);
+      expect(tradeRows(o)).toHaveLength(10);
+    });
+
+    it('對帳期間訂單被改為非 pending：不寫入新編號', async () => {
+      const o = await createOrder();
+      const t1 = await startTrade(o);
+      ecpay[t1] = { status: '0' };
+      fetchSpy.mockImplementationOnce(async () => {
+        db.prepare("UPDATE orders SET status = 'failed' WHERE id = ?").run(o.id);
+        return { ok: true, status: 200, text: async () => buildResponse(t1) };
+      });
+
+      const res = await enter(o);
+
+      expect(res.status).toBe(400);
+      expect(tradeRows(o)).toHaveLength(1);
+      expect(orderRow(o).merchant_trade_no).toBe(t1);
+    });
+  });
+
+  describe('重複查詢', () => {
+    it('已 paid 再查：不呼叫綠界，付款欄位不變', async () => {
+      const o = await createOrder();
+      const t1 = await startTrade(o);
+      ecpay[t1] = { status: '1' };
+      await check(o);
+      const before = orderRow(o);
+      fetchSpy.mockClear();
+
+      const res = await check(o);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('paid');
+      expect(res.body.message).toBe('訂單已付款');
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(orderRow(o)).toEqual(before);
+    });
+
+    it('併發兩次查詢：皆回 paid，只有一次轉換狀態', async () => {
+      const o = await createOrder();
+      const t1 = await startTrade(o);
+      ecpay[t1] = { status: '1' };
+
+      const [a, b] = await Promise.all([check(o), check(o)]);
+
+      expect(a.body.data.status).toBe('paid');
+      expect(b.body.data.status).toBe('paid');
+      expect([a.body.message, b.body.message].sort()).toEqual(['付款成功', '訂單已付款'].sort());
+    });
+
+    it('未付款重複查詢：維持 pending 並更新 trade_status', async () => {
+      const o = await createOrder();
+      const t1 = await startTrade(o);
+
+      const first = await check(o);
+      expect(first.status).toBe(200);
+      expect(first.body.data).toEqual({ status: 'pending', trade_status: '10200047' });
+      expect(tradeRows(o)[0].trade_status).toBe('10200047');
+
+      ecpay[t1] = { status: '0' };
+      const second = await check(o);
+      expect(second.body.data).toEqual({ status: 'pending', trade_status: '0' });
+      expect(tradeRows(o)[0].trade_status).toBe('0');
+      expect(tradeRows(o)[0].checked_at).toBeTruthy();
+      expect(orderRow(o).status).toBe('pending');
+    });
+
+    it('曾發起綠界付款但以模擬付款標成 paid：不呼叫綠界', async () => {
+      const o = await createOrder();
+      await startTrade(o);
+      await request(app)
+        .patch(`/api/orders/${o.id}/pay`)
+        .set('Authorization', `Bearer ${o.token}`)
+        .send({ action: 'success' });
+
+      const res = await check(o);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('paid');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('多筆交易', () => {
+    async function twoTrades(o) {
+      const t1 = await startTrade(o);
+      ecpay[t1] = { status: '0' };
+      const t2 = await startTrade(o);
+      ecpay[t2] = { status: '0' };
+      queried = [];
+      return [t1, t2];
+    }
+
+    it('舊單已付、新單未付：轉 paid 並記錄實際付款的編號', async () => {
+      const o = await createOrder();
+      const [t1, t2] = await twoTrades(o);
+      ecpay[t1] = { status: '1' };
+
+      const res = await check(o);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('paid');
+      expect(queried).toEqual([t1, t2]);
+      const row = orderRow(o);
+      expect(row.ecpay_trade_no).toBe(`TN${t1}`.slice(0, 20));
+      expect(row.merchant_trade_no).toBe(t1);
+      expect(row.payment_type).toBe('Credit_CreditCard');
+      expect(row.paid_at).toBe('2026/11/04 12:00:00');
+    });
+
+    it('舊單未付、新單已付：轉 paid', async () => {
+      const o = await createOrder();
+      const [, t2] = await twoTrades(o);
+      ecpay[t2] = { status: '1' };
+
+      const res = await check(o);
+
+      expect(res.body.data.status).toBe('paid');
+      expect(orderRow(o).merchant_trade_no).toBe(t2);
+    });
+
+    it('舊單已付、新單未送達綠界（10200047、TradeAmt=0）：轉 paid 而非 502', async () => {
+      const o = await createOrder();
+      const t1 = await startTrade(o);
+      const t2 = await startTrade(o); // t2 不在 ecpay 表內，等同未送達
+      ecpay[t1] = { status: '1' };
+      queried = [];
+
+      const res = await check(o);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('paid');
+      expect(queried).toEqual([t1, t2]);
+    });
+
+    it('全部未付：維持 pending，每個編號恰查一次', async () => {
+      const o = await createOrder();
+      const [t1, t2] = await twoTrades(o);
+
+      const res = await check(o);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('pending');
+      expect(res.body.message).toContain('尚未');
+      expect(queried).toEqual([t1, t2]);
+    });
+
+    it('一筆連線失敗、另一筆已付：轉 paid', async () => {
+      const o = await createOrder();
+      const [t1, t2] = await twoTrades(o);
+      ecpay[t1] = { networkError: true };
+      ecpay[t2] = { status: '1' };
+
+      const res = await check(o);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('paid');
+    });
+
+    it('一筆連線失敗、其餘未付：502，維持 pending', async () => {
+      const o = await createOrder();
+      const [t1] = await twoTrades(o);
+      ecpay[t1] = { networkError: true };
+
+      const res = await check(o);
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe('ECPAY_QUERY_FAILED');
+      expect(orderRow(o).status).toBe('pending');
+    });
+
+    it('一筆 CheckMacValue 錯、其餘未付：502，且不寫回該筆狀態', async () => {
+      const o = await createOrder();
+      const [t1] = await twoTrades(o);
+      ecpay[t1] = { status: '1', badCmv: true };
+
+      const res = await check(o);
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe('ECPAY_QUERY_FAILED');
+      expect(orderRow(o).status).toBe('pending');
+      expect(tradeRows(o)[0].trade_status).not.toBe('1');
+    });
+
+    it('已付但金額不符、其餘未付：502，維持 pending', async () => {
+      const o = await createOrder();
+      const [t1] = await twoTrades(o);
+      ecpay[t1] = { status: '1', amt: 1 };
+
+      const res = await check(o);
+
+      expect(res.status).toBe(502);
+      expect(res.body.message).toBe('交易金額不符');
+      expect(orderRow(o).status).toBe('pending');
+    });
+
+    it('回傳的 MerchantTradeNo 與查詢值不符：502', async () => {
+      const o = await createOrder();
+      const [t1] = await twoTrades(o);
+      ecpay[t1] = { status: '1', wrongNo: true };
+
+      const res = await check(o);
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe('ECPAY_QUERY_FAILED');
+      expect(orderRow(o).status).toBe('pending');
+    });
+
+    it('兩筆皆已付：採最早一筆並記錄重複扣款', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const o = await createOrder();
+      const [t1, t2] = await twoTrades(o);
+      ecpay[t1] = { status: '1', date: '2026/11/04 12:00:00' };
+      ecpay[t2] = { status: '1', date: '2026/11/04 12:05:00' };
+
+      const res = await check(o);
+
+      expect(res.body.data.status).toBe('paid');
+      expect(orderRow(o).merchant_trade_no).toBe(t1);
+      expect(orderRow(o).paid_at).toBe('2026/11/04 12:00:00');
+      expect(tradeRows(o).map(t => t.trade_status)).toEqual(['1', '1']);
+      const logged = errorSpy.mock.calls.flat().join(' ');
+      expect(logged).toContain(t1);
+      expect(logged).toContain(t2);
+    });
+
+    it('收到 403：停止查詢後續編號並回 502', async () => {
+      const o = await createOrder();
+      const [t1, t2] = await twoTrades(o);
+      ecpay[t1] = { http: 403 };
+      ecpay[t2] = { status: '1' };
+
+      const res = await check(o);
+
+      expect(res.status).toBe(502);
+      expect(queried).toEqual([t1]);
+      expect(orderRow(o).status).toBe('pending');
+    });
+  });
+
+  describe('遷移與編號', () => {
+    it('回填可重複執行且不重複', async () => {
+      const o = await createOrder();
+      const legacyNo = `LEGACY${o.id.replace(/-/g, '').slice(0, 14)}`.toUpperCase();
+      db.prepare('UPDATE orders SET merchant_trade_no = ? WHERE id = ?').run(legacyNo, o.id);
+      expect(tradeRows(o)).toHaveLength(0);
+
+      db.backfillEcpayTrades();
+      db.backfillEcpayTrades();
+
+      expect(tradeRows(o).map(t => t.merchant_trade_no)).toEqual([legacyNo]);
+    });
+
+    it('同一毫秒連續產生的編號仍不同，且符合綠界格式', () => {
+      vi.spyOn(Date, 'now').mockReturnValue(1790000000000);
+      const orderId = '550e8400-e29b-41d4-a716-446655440000';
+      const nos = Array.from({ length: 5 }, () => generateMerchantTradeNo(orderId));
+      expect(new Set(nos).size).toBeGreaterThan(1);
+      for (const no of nos) {
+        expect(no).toMatch(/^[A-Z0-9]+$/);
+        expect(no.length).toBeLessThanOrEqual(20);
+      }
+    });
+  });
+});
